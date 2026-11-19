@@ -100,6 +100,39 @@ async function save(uid, el) {{
   flag.style.opacity = 1;
   setTimeout(()=>{{flag.style.opacity=0}}, 1400);
 }}
+
+// Same wording as the server's _ago(), computed against the viewer's clock.
+function plural(n, unit) {{ return n + ' ' + unit + (n === 1 ? '' : 's'); }}
+function ago(ts, hasTime) {{
+  const secs = (Date.now() - ts) / 1000;
+  if (!hasTime) {{
+    const days = Math.floor(secs / 86400);
+    return days <= 0 ? 'today' : plural(days, 'day') + ' ago';
+  }}
+  if (secs < 3600) {{
+    const mins = Math.max(Math.floor(secs / 60), 0);
+    return mins < 1 ? 'just now' : plural(mins, 'minute') + ' ago';
+  }}
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  if (!days) return plural(hours, 'hour') + ' ago';
+  return hours ? plural(days, 'day') + ' and ' + plural(hours, 'hour') + ' ago'
+               : plural(days, 'day') + ' ago';
+}}
+function tick() {{
+  const now = Date.now();
+  for (const el of document.querySelectorAll('.ago[data-ts]')) {{
+    const ts = Number(el.dataset.ts);
+    el.textContent = el.dataset.label + ' ' + ago(ts, el.dataset.hastime === '1');
+    const fresh = now - ts < 86400000;
+    el.classList.toggle('fresh', fresh);
+    el.classList.toggle('stale', !fresh);
+  }}
+}}
+tick();
+setInterval(tick, 60000);
+// Browsers slow timers in background tabs; catch up when the tab is shown.
+document.addEventListener('visibilitychange', () => {{ if (!document.hidden) tick(); }});
 </script>
 </body></html>"""
 
@@ -199,7 +232,12 @@ def _job_html(r: sqlite3.Row) -> str:
                  else "updated" if r["ats"] == "comeet" else "posted")
         age = (datetime.now(timezone.utc) - dt).total_seconds()
         tone = "fresh" if age < 86400 else "stale"
-        posted = (f' · <span class="{tone}" title="{esc(dt.isoformat())}">{label} '
+        # The server's text is the fallback; the page script recomputes it
+        # from data-ts on load and every minute, so an open tab stays right.
+        posted = (f' · <span class="ago {tone}" title="{esc(dt.isoformat())}"'
+                  f' data-ts="{int(dt.timestamp() * 1000)}"'
+                  f' data-hastime="{1 if has_time else 0}"'
+                  f' data-label="{esc(label)}">{label} '
                   f'{esc(_ago(dt, has_time))}</span>')
 
     deets = ""
