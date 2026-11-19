@@ -580,8 +580,9 @@ def score_job(job: Job, s: dict) -> Job:
     if job.experience in ("10+", "5-10"):
         pts += 1
         why.append(f"{job.experience} yrs")
-    elif job.experience in ("0-2",):
-        pts -= 3
+    elif job.experience in ("0-2",) and int(s.get("junior_penalty", 3)):
+        # scoring.junior_penalty: 0 keeps junior roles on an equal footing.
+        pts -= int(s.get("junior_penalty", 3))
         why.append("too junior")
 
     # Optional +1 when the posting mentions whatever differentiates you.
