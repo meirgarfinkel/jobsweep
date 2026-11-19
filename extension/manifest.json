@@ -1,0 +1,29 @@
+{
+  "manifest_version": 2,
+  "name": "jobsweep",
+  "version": "0.1.0",
+  "description": "Fills job application forms from your jobsweep profile. Never submits them.",
+  "browser_specific_settings": {
+    "gecko": { "id": "jobsweep@local" }
+  },
+  "permissions": ["tabs", "http://127.0.0.1:8765/*", "<all_urls>"],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": true
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1:8765/*"],
+      "js": ["board.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "css": ["banner.css"],
+      "all_frames": true,
+      "match_about_blank": true,
+      "run_at": "document_idle"
+    }
+  ]
+}

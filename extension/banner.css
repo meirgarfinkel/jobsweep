@@ -1,0 +1,21 @@
+/* The host element of the Fill button and banner. Everything inside it lives
+   in a closed shadow root, so page CSS only ever sees this one element. */
+html jobsweep-ui#jobsweep-ui {
+  all: initial !important;
+  display: block !important;
+  position: fixed !important;
+  right: 16px !important;
+  bottom: 16px !important;
+  left: auto !important;
+  top: auto !important;
+  z-index: 2147483647 !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  transform: none !important;
+  opacity: 1 !important;
+  visibility: visible !important;
+  pointer-events: auto !important;
+}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>jobsweep extension test form</title>
+<style>
+  /* Hostile page CSS: the Fill button and banner must still look right. */
+  * { font-family: Georgia, serif !important; }
+  div, button { color: hotpink !important; background: yellow !important; }
+  body { font-family: sans-serif; max-width: 720px; margin: 24px auto; }
+  iframe { width: 100%; height: 900px; border: 1px solid #999; }
+</style>
+</head>
+<body>
+<h1>Test application form</h1>
+<p>Open this page as <code>form.html#jobsweep=&lt;uid&gt;</code> with the extension loaded.
+The Fill button should appear here and inside the iframe below. Nothing on this page may be submitted.</p>
+<form id="apply" action="https://example.invalid/should-never-be-called" method="post">
+  <p><label for="name">Full name *</label><br><input id="name" name="name" required></p>
+  <p><label>Email * <input type="email" name="email" required></label></p>
+  <p><span>Phone</span><br><input type="tel" name="phone"></p>
+  <p><input type="url" name="linkedin" aria-label="LinkedIn profile URL"></p>
+  <p><label for="why">Why do you want to work here?</label><br><textarea id="why" name="why" rows="4" cols="50"></textarea></p>
+  <p><label for="hear">How did you hear about us?</label>
+    <select id="hear" name="hear">
+      <option value="">Select...</option>
+      <option value="li">LinkedIn</option>
+      <option value="site">Company website</option>
+      <option value="friend">A friend</option>
+    </select></p>
+  <fieldset><legend>Are you authorized to work in Israel? *</legend>
+    <label><input type="radio" name="auth" value="y" required> Yes</label>
+    <label><input type="radio" name="auth" value="n"> No</label>
+  </fieldset>
+  <p><label for="city">עיר מגורים</label><br><input id="city" name="city"></p>
+  <p><label><input type="checkbox" name="privacy" required> I agree to the privacy policy *</label></p>
+  <p><label><input type="checkbox" name="news"> Send me news about future openings</label></p>
+  <p><label for="resume">Resume/CV *</label><br><input type="file" id="resume" name="resume" accept=".pdf,.doc,.docx" required></p>
+  <p><button type="submit">Submit application</button></p>
+</form>
+<h2>Same form in an iframe</h2>
+<iframe srcdoc="<!doctype html><meta charset=&quot;utf-8&quot;><body style=&quot;font-family:sans-serif&quot;><h2>Inside the iframe</h2><form id=&quot;apply&quot; action=&quot;https://example.invalid/should-never-be-called&quot; method=&quot;post&quot;>
+  <p><label for=&quot;name&quot;>Full name *</label><br><input id=&quot;name&quot; name=&quot;name&quot; required></p>
+  <p><label>Email * <input type=&quot;email&quot; name=&quot;email&quot; required></label></p>
+  <p><span>Phone</span><br><input type=&quot;tel&quot; name=&quot;phone&quot;></p>
+  <p><input type=&quot;url&quot; name=&quot;linkedin&quot; aria-label=&quot;LinkedIn profile URL&quot;></p>
+  <p><label for=&quot;why&quot;>Why do you want to work here?</label><br><textarea id=&quot;why&quot; name=&quot;why&quot; rows=&quot;4&quot; cols=&quot;50&quot;></textarea></p>
+  <p><label for=&quot;hear&quot;>How did you hear about us?</label>
+    <select id=&quot;hear&quot; name=&quot;hear&quot;>
+      <option value=&quot;&quot;>Select...</option>
+      <option value=&quot;li&quot;>LinkedIn</option>
+      <option value=&quot;site&quot;>Company website</option>
+      <option value=&quot;friend&quot;>A friend</option>
+    </select></p>
+  <fieldset><legend>Are you authorized to work in Israel? *</legend>
+    <label><input type=&quot;radio&quot; name=&quot;auth&quot; value=&quot;y&quot; required> Yes</label>
+    <label><input type=&quot;radio&quot; name=&quot;auth&quot; value=&quot;n&quot;> No</label>
+  </fieldset>
+  <p><label for=&quot;city&quot;>עיר מגורים</label><br><input id=&quot;city&quot; name=&quot;city&quot;></p>
+  <p><label><input type=&quot;checkbox&quot; name=&quot;privacy&quot; required> I agree to the privacy policy *</label></p>
+  <p><label><input type=&quot;checkbox&quot; name=&quot;news&quot;> Send me news about future openings</label></p>
+  <p><label for=&quot;resume&quot;>Resume/CV *</label><br><input type=&quot;file&quot; id=&quot;resume&quot; name=&quot;resume&quot; accept=&quot;.pdf,.doc,.docx&quot; required></p>
+  <p><button type=&quot;submit&quot;>Submit application</button></p>
+</form><script>
+document.addEventListener(&quot;submit&quot;, (e) => {
+  e.preventDefault();
+  document.body.insertAdjacentHTML(&quot;afterbegin&quot;, '<p id=&quot;submitted&quot; style=&quot;background:red;color:#fff;padding:8px&quot;>SUBMIT FIRED: the extension must never do this.</p>');
+}, true);
+</script></body>"></iframe>
+<script>
+document.addEventListener("submit", (e) => {
+  e.preventDefault();
+  document.body.insertAdjacentHTML("afterbegin", '<p id="submitted" style="background:red;color:#fff;padding:8px">SUBMIT FIRED: the extension must never do this.</p>');
+}, true);
+</script>
+</body>
+</html>

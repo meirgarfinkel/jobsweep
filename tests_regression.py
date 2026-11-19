@@ -543,5 +543,21 @@ finally:
     llm.ask = _orig_ask; applicant.HERE = _ol5
     _sh5.rmtree(_d5, ignore_errors=True)
 
+print("\n#A6 extension")
+_ext = pathlib.Path(__file__).resolve().parent / "extension"
+try:
+    _man = json.loads((_ext / "manifest.json").read_text(encoding="utf-8"))
+except (OSError, ValueError):
+    _man = {}
+check("manifest parses", bool(_man))
+check("manifest v2", _man.get("manifest_version") == 2)
+check("board host permission", "http://127.0.0.1:8765/*" in (_man.get("permissions") or []))
+_cs = [c for c in _man.get("content_scripts") or [] if "content.js" in (c.get("js") or [])]
+check("content.js runs in all frames", bool(_cs) and all(c.get("all_frames") is True for c in _cs))
+_js = sorted(_ext.glob("**/*.js")) if _ext.is_dir() else []
+check("extension has js files", len(_js) >= 3)
+_sub = [f.name for f in _js if "submit(" in (_t := f.read_text(encoding="utf-8")) or "requestSubmit" in _t]
+check("no js file submits a form", not _sub, str(_sub))
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
