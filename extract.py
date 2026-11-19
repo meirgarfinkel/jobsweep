@@ -7,12 +7,21 @@ import re
 
 # "5+ years of experience", "7-10 years of professional experience",
 # "at least 6 years' experience", "experience of 8 years", "5+ שנות ניסיון".
+# Without the word "experience", a number counts only when it reads as a
+# requirement: "6+ years as a ...", "3-5 years in ...", "minimum 8 years
+# selling ...". A bare "10 years" is usually company history.
+_NOT_TENURE = r"(?!\s*(?:ago|old|of\s+age|remaining|left))"
 _YEARS_PATTERNS = (
     re.compile(r"(?:\b(over|more than)\s+)?\b(\d{1,2})\s*(?:\+|plus)?\s*"
                r"(?:(?:-|–|to)\s*\d{1,2}\s*\+?\s*)?years?\b[^.\n]{0,60}?"
                r"\bexperience", re.I),
     re.compile(r"\bexperience\b[^.\n]{0,25}?\b(?:(over|more than)\s+)?"
                r"(\d{1,2})\s*\+?\s*years?\b", re.I),
+    re.compile(r"(?:\b(over|more than|at least|minimum(?:\s+of)?|min\.?)\s+)?"
+               r"\b(\d{1,2})\s*(?:\+|plus\b|(?:-|–|to)\s*\d{1,2}\s*\+?)\s*"
+               r"years?\b" + _NOT_TENURE, re.I),
+    re.compile(r"\b(at least|minimum(?:\s+of)?|min\.?)\s+(\d{1,2})\s*years?\b"
+               + _NOT_TENURE, re.I),
     re.compile(r"()(\d{1,2})\s*\+?\s*(?:שנות|שנים)[^.\n]{0,20}?ניסיון"),
     re.compile(r"ניסיון[^.\n]{0,20}?(?:(מעל|לפחות)\s*)?(\d{1,2})\s*\+?\s*שנ"),
 )
@@ -27,7 +36,7 @@ def years_required(text: str) -> int | None:
     for pat in _YEARS_PATTERNS:
         for m in pat.finditer(text or ""):
             n = int(m.group(2))
-            if m.group(1) in ("over", "more than", "מעל"):
+            if (m.group(1) or "").lower() in ("over", "more than", "מעל"):
                 n += 1
             if 0 < n <= 15:
                 found.append(n)
