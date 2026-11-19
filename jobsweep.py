@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import functools
 import hashlib
+import json
 import os
 import re
 import sys
@@ -489,6 +490,35 @@ def reset_exclusions() -> None:
     EXCLUDED_SAMPLE.clear()
 
 
+# "5+ years of experience", "7-10 years of professional experience",
+# "at least 6 years' experience", "experience of 8 years", "5+ שנות ניסיון".
+_YEARS_PATTERNS = (
+    re.compile(r"(?:\b(over|more than)\s+)?\b(\d{1,2})\s*(?:\+|plus)?\s*"
+               r"(?:(?:-|–|to)\s*\d{1,2}\s*\+?\s*)?years?\b[^.\n]{0,60}?"
+               r"\bexperience", re.I),
+    re.compile(r"\bexperience\b[^.\n]{0,25}?\b(?:(over|more than)\s+)?"
+               r"(\d{1,2})\s*\+?\s*years?\b", re.I),
+    re.compile(r"()(\d{1,2})\s*\+?\s*(?:שנות|שנים)[^.\n]{0,20}?ניסיון"),
+    re.compile(r"ניסיון[^.\n]{0,20}?(?:(מעל|לפחות)\s*)?(\d{1,2})\s*\+?\s*שנ"),
+)
+
+
+def years_required(text: str) -> int | None:
+    """Largest years-of-experience requirement stated in the text, or None.
+
+    Numbers above 15 are ignored: those are company boasts ("20 years of
+    experience in the industry"), not requirements."""
+    found = []
+    for pat in _YEARS_PATTERNS:
+        for m in pat.finditer(text or ""):
+            n = int(m.group(2))
+            if m.group(1) in ("over", "more than", "מעל"):
+                n += 1
+            if 0 < n <= 15:
+                found.append(n)
+    return max(found) if found else None
+
+
 def score_job(job: Job, s: dict) -> Job:
     t = (job.title or "").lower()
     # A posting can arrive with location null; keep one safe string and use it
@@ -512,6 +542,20 @@ def score_job(job: Job, s: dict) -> Job:
             EXCLUDED_BY[bad] = EXCLUDED_BY.get(bad, 0) + 1
             sample = EXCLUDED_SAMPLE.setdefault(bad, [])
             if len(sample) < 3:        # only the first is ever displayed
+                sample.append(job.title)
+            return job
+
+    # scoring.max_years_required: drop roles whose description asks for more
+    # years than this. Postings that state no number are kept.
+    cap = s.get("max_years_required")
+    if cap is not None:
+        need = years_required(job.description)
+        if need is not None and need > int(cap):
+            key = f"over {cap} years"
+            job.score, job.reasons = -99, [f"excluded: asks {need}+ years"]
+            EXCLUDED_BY[key] = EXCLUDED_BY.get(key, 0) + 1
+            sample = EXCLUDED_SAMPLE.setdefault(key, [])
+            if len(sample) < 3:
                 sample.append(job.title)
             return job
 
@@ -777,6 +821,34 @@ def run_explain(cfg: dict, db: str) -> None:
               "no exclusion is removing an unusual share of postings.")
 
 
+def run_rescore(s: dict, db: str) -> None:
+    """Score stored postings again after the rules change. Only the score and
+    reasons columns are written."""
+    reset_exclusions()
+    with store.connect(db) as conn:
+        rows = list(conn.execute("SELECT * FROM jobs"))
+        changed = 0
+        for r in rows:
+            job = Job(uid=r["uid"], title=r["title"], company=r["company"],
+                      location=r["location"] or "", url=r["url"] or "",
+                      ats=r["ats"] or "", description=r["description"] or "",
+                      arrangement=r["arrangement"] or "",
+                      experience=r["experience"] or "",
+                      salary=r["salary"] or "")
+            score_job(job, s)
+            reasons = json.dumps(job.reasons)
+            if job.score != r["score"] or reasons != (r["reasons"] or "[]"):
+                conn.execute("UPDATE jobs SET score=?, reasons=? WHERE uid=?",
+                             (job.score, reasons, job.uid))
+                changed += 1
+        conn.commit()
+    print(f"Rescored {len(rows)} stored postings; {changed} changed.")
+    if EXCLUDED_BY:
+        print("  now excluded: " + ", ".join(
+            f"{k} x{v}" for k, v in sorted(EXCLUDED_BY.items(),
+                                           key=lambda kv: -kv[1])))
+
+
 def deep_merge(base: dict, over: dict) -> dict:
     """Recursively merge `over` into `base`. Non-dict values are replaced."""
     out = dict(base)
@@ -808,6 +880,9 @@ def main() -> None:
     ap.add_argument("--explain", action="store_true",
                     help="audit your term lists against the postings already "
                          "swept; run this after editing any term list")
+    ap.add_argument("--rescore", action="store_true",
+                    help="re-apply the current scoring rules to postings "
+                         "already stored; statuses and notes are untouched")
     ap.add_argument("--evaluate-limit", type=int, default=15,
                     help="max postings to fit-score in one pass")
     args = ap.parse_args()
@@ -843,6 +918,10 @@ def main() -> None:
 
     if args.evaluate:
         run_evaluate(cfg, db, args.evaluate_limit)
+        return
+
+    if args.rescore:
+        run_rescore(s, db)
         return
 
     source = make_source(cfg)
