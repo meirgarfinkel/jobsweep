@@ -1038,10 +1038,16 @@ def run_profile_from_cv(cfg: dict) -> Path:
     prompt = (
         f"Read the CV PDF at {cv} and write a Markdown background for the applicant. "
         "Include: roles with dates, skills, education, languages, notable projects. "
+        "Use a Markdown heading for each section. "
         "Facts only, taken from the CV; invent nothing. Reply with only the Markdown.")
     timeout = max(int(ac.get("timeout") or 120), 300)
+    # The CLI runs from an empty temp dir, so it may read only the CV's folder.
     text = llm.ask(prompt, ac.get("backend") or "claude_cli", timeout=timeout,
-                   tools="Read", pdf_path=cv)
+                   tools="Read", pdf_path=cv, add_dirs=[str(Path(cv).parent)])
+    if not any(line.lstrip().startswith("#") for line in (text or "").splitlines()):
+        # A refusal ("I can't read that file") is not a background; don't save it.
+        raise llm.LLMError("Claude didn't return a Markdown background; nothing saved. "
+                           f"Its reply began: {(text or '').strip()[:200]!r}")
     out = here / (ac.get("profile_file") or "profile.local.md")
     if out.exists():
         out = out.with_name(out.name + ".new")

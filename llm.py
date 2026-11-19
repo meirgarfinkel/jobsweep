@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import subprocess
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -21,14 +22,25 @@ def _looks_like_auth(text: str) -> bool:
     return "login" in t or "log in" in t or "auth" in t
 
 
-def _ask_cli(prompt: str, timeout: int, tools: str) -> str:
-    argv = ["claude", "-p", "--output-format", "json", "--tools", tools]
+# The prompt holds personal data and an untrusted job description, so the CLI
+# runs without the user's MCP servers, hooks, plugins, settings or CLAUDE.md,
+# saves no transcript, and denies anything that would ask for permission.
+# It runs from an empty temp dir so no project CLAUDE.md applies.
+_ISOLATION = ["--strict-mcp-config", "--no-session-persistence", "--safe-mode",
+              "--restricted", "--permission-prompts", "none"]
+
+
+def _ask_cli(prompt: str, timeout: int, tools: str, add_dirs=()) -> str:
+    argv = ["claude", "-p", "--output-format", "json", "--tools", tools] + _ISOLATION
+    for d in add_dirs:
+        argv += ["--add-dir", str(d)]
     model = os.environ.get("JOBSWEEP_MODEL")
     if model:
         argv += ["--model", model]
     try:
-        proc = subprocess.run(argv, input=prompt, capture_output=True,
-                              text=True, timeout=timeout)
+        with tempfile.TemporaryDirectory(prefix="jobsweep-") as cwd:
+            proc = subprocess.run(argv, input=prompt, capture_output=True,
+                                  text=True, timeout=timeout, cwd=cwd)
     except FileNotFoundError:
         raise LLMError("Claude Code isn't installed (no 'claude' command).")
     except subprocess.TimeoutExpired:
@@ -65,7 +77,7 @@ def _ask_api(prompt: str, timeout: int, pdf_path: str | None = None) -> str:
                    {"type": "text", "text": prompt}]
     body = json.dumps({
         "model": os.environ.get("JOBSWEEP_MODEL", DEFAULT_MODEL),
-        "max_tokens": 4000,
+        "max_tokens": 8000,
         "messages": [{"role": "user", "content": content}],
     }).encode()
     req = urllib.request.Request(
@@ -80,13 +92,16 @@ def _ask_api(prompt: str, timeout: int, pdf_path: str | None = None) -> str:
         raise LLMError(f"The Anthropic API returned HTTP {e.code}.")
     except (urllib.error.URLError, TimeoutError, OSError) as e:
         raise LLMError(f"Could not reach the Anthropic API: {e}")
+    if payload.get("stop_reason") == "max_tokens":
+        raise LLMError("The model's answer was cut off (too long); try again.")
     return "".join(b.get("text", "") for b in payload.get("content", []))
 
 
 def ask(prompt: str, backend: str = "claude_cli", timeout: int = 120,
-        tools: str = "", pdf_path: str | None = None) -> str:
+        tools: str = "", pdf_path: str | None = None, add_dirs=()) -> str:
+    """add_dirs: directories the CLI may read (it runs from an empty temp dir)."""
     if backend == "api":
         return _ask_api(prompt, timeout, pdf_path)
     if backend == "claude_cli":
-        return _ask_cli(prompt, timeout, tools)
+        return _ask_cli(prompt, timeout, tools, add_dirs)
     raise LLMError(f"Unknown backend '{backend}': use claude_cli or api.")
