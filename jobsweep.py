@@ -856,6 +856,9 @@ def main() -> None:
     ap.add_argument("--serve", action="store_true",
                     help="open the local review board instead of sweeping")
     ap.add_argument("--port", type=int, default=8765, help="port for --serve")
+    ap.add_argument("--source", choices=("indexed", "direct"),
+                    help="sweep only this source this run, overriding "
+                         "source.mode (e.g. direct = your own boards, free)")
     ap.add_argument("--evaluate", action="store_true",
                     help="LLM fit-score the postings that cleared the keyword "
                          "bar (needs ANTHROPIC_API_KEY)")
@@ -884,6 +887,9 @@ def main() -> None:
         overlay = yaml.safe_load(local.read_text(encoding="utf-8")) or {}
         cfg = deep_merge(cfg, overlay)
         print(f"merged overrides from {local}")
+
+    if args.source:
+        cfg["source"] = {**cfg["source"], "mode": args.source}
 
     db = (cfg.get("output") or {}).get("db", "jobsweep.sqlite3")
 
