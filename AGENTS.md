@@ -286,6 +286,45 @@ costs money per posting; results are cached so nothing is scored twice.
 2. `python jobsweep.py --evaluate` (add `--evaluate-limit 5` to try it cheaply).
 3. The board then shows a fit pill on each scored card.
 
+## Optional — Apply for me
+
+The board's **Apply for me** button opens a job and, with the Firefox
+extension in `extension/`, fills the application form from the user's
+profile. It never submits; the user reviews and submits. Offer it after
+the board works. Personal data goes only in gitignored files:
+`applicant.local.yaml`, `profile.local.md` and the CV PDF. Never write it
+anywhere else, and never echo it into logs or commits.
+
+1. Ask for the path to their CV (PDF), their contact details, work
+   authorization, notice period, salary expectation, and how they usually
+   answer "how did you hear about us".
+2. Ask whether they want to give demographic answers (gender, race or
+   ethnicity, veteran, disability). It is optional. If they decline, leave
+   `demographics` out and forms get a "prefer not to say" option.
+3. Copy `applicant.local.example.yaml` to `applicant.local.yaml` and fill it
+   with their answers.
+4. Run `python jobsweep.py --profile-from-cv`. It drafts `profile.local.md`
+   from the CV (or `profile.local.md.new` if one exists). Have the user read
+   it and fix mistakes; fills use it as written.
+5. Backend: the default `claude -p` uses their Claude Code subscription, so
+   check that `claude` is installed and logged in (they run `claude` once).
+   `apply.backend: api` in `config.local.yaml` uses `ANTHROPIC_API_KEY`
+   instead, about 2-4 cents per fill.
+6. Install the extension: in Zen or Firefox open `about:debugging`, This
+   Firefox, Load Temporary Add-on, pick `extension/manifest.json`. It is
+   gone after a restart. To keep it, try setting
+   `xpinstall.signatures.required` to `false` in `about:config` and
+   installing an `.xpi` of the folder; if the browser still drops it, sign
+   it for free with `npx web-ext sign --channel=unlisted --api-key=...
+   --api-secret=...` (keys from the developer hub at addons.mozilla.org).
+   The keep-it routes are not verified on Zen yet; say so.
+7. Start `python jobsweep.py --serve`, click **Apply for me** on a card and
+   check that the Fill button appears on the form.
+
+Tell the user the limits: custom (non-native) dropdowns are not filled,
+Workday needs a login first and one Fill click per page, and they always
+press submit themselves.
+
 ## When something goes wrong
 
 - **`No postings stored yet`** from `--explain`: run a sweep first.
@@ -298,5 +337,8 @@ costs money per posting; results are cached so nothing is scored twice.
 - **`disk I/O error`** on the database: the folder is synced (OneDrive,
   Dropbox) or a network share. Set `output.db` in `config.local.yaml` to a
   local path.
+- **Fill says the board isn't running**: start `python jobsweep.py --serve`,
+  then click Fill again.
+- **Fill says Claude Code isn't logged in**: run `claude` once in a terminal.
 - **Offline self-check**: `python tests_regression.py` needs no token and
   should end with `0 failed`.

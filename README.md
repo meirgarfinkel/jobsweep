@@ -365,6 +365,99 @@ Node, no build step) at http://127.0.0.1:8765/ listing everything swept.
 The board reads the database on every load, so new postings from a
 scheduled sweep appear on refresh.
 
+## Apply for me
+
+Each card on the review board has an **Apply for me** button. It opens the
+job in a new tab. A small Firefox extension adds a **Fill with jobsweep**
+button to the application form. One click sends the job, your facts, your
+background and the form's field labels to Claude, which drafts the answers;
+the extension types them in and attaches your CV.
+
+**It never submits.** You read the form, fix what is wrong and press submit
+yourself. Filled fields get a green outline, fields that need you get an
+amber one, and a banner counts them. The extension contains no code that
+submits a form.
+
+### Set up
+
+1. Copy `applicant.local.example.yaml` to `applicant.local.yaml` and fill it
+   in: name, contact details, work authorization, notice period, salary
+   expectation, and `cv_path` (the path to your CV as a PDF). Demographics
+   are optional. The file is gitignored.
+2. Run `python jobsweep.py --profile-from-cv`. Claude reads the CV and
+   drafts `profile.local.md`, the background it answers from. Read it and
+   correct anything wrong. If the file already exists, the draft goes to
+   `profile.local.md.new` instead.
+3. Install the extension (below), then run `python jobsweep.py --serve` and
+   click **Apply for me** on a card.
+
+### Install the extension in Zen or Firefox
+
+**To try it.** Open `about:debugging`, choose This Firefox, then Load
+Temporary Add-on, and pick `extension/manifest.json`. Firefox drops a
+temporary add-on when the browser restarts, so you load it again each time.
+
+**To keep it.** Firefox normally refuses unsigned add-ons. Two routes:
+
+1. In `about:config`, set `xpinstall.signatures.required` to `false`. Some
+   Firefox-based browsers honour this. Zip the `extension/` folder into an
+   `.xpi`, then use about:addons, Install Add-on From File.
+2. If your browser still drops it after a restart, sign it for free as an
+   unlisted add-on. Create API keys in the developer hub at
+   addons.mozilla.org, then run
+   `npx web-ext sign --channel=unlisted --api-key=... --api-secret=...`
+   from the `extension/` folder and install the `.xpi` it produces.
+
+I have not yet checked on Zen whether route 1 survives a restart, or tried
+route 2. Release Firefox ignores the pref, so use route 2 there.
+
+### Backends
+
+By default the board calls `claude -p`, which uses your Claude Code
+subscription. Run `claude` once in a terminal to log in first. With
+`apply.backend: api` in `config.local.yaml`, it calls the Anthropic API with
+`ANTHROPIC_API_KEY` instead, at roughly 2-4 cents per fill. `JOBSWEEP_MODEL`
+picks the model. `apply.timeout` (default 120 seconds) kills a call that
+hangs. Each fill is one model call, and the CLI runs with no tools.
+
+### What gets filled
+
+The model follows these rules, and the board checks its answers against them:
+
+- Facts (name, contact, work authorization, salary) come only from your
+  profile.
+- Dropdowns, radios and checkbox groups get one of the offered options, or
+  stay empty.
+- Free text is written in the question's language and claims nothing your
+  background doesn't support.
+- Screening questions are answered only when your background clearly
+  supports the answer.
+- Demographic questions use your profile value, else a "decline" or "prefer
+  not to say" option, else stay empty and are flagged.
+- Required agreements (privacy policy, terms) are ticked. Optional ones
+  (newsletter, talent pool) are left unticked.
+- "How did you hear about us" gets your `heard_about_us` value.
+- Everything else stays empty and is listed as needing you.
+
+### Privacy
+
+A fill sends Claude the job (title, company, location, description), your
+applicant facts, your background text and the form's field labels and
+options. A fill does not send the CV file; the extension attaches it in your
+browser. `--profile-from-cv` does send it, once, so Claude can read it. `applicant.local.yaml`, `profile.local.md` and your CV stay on your
+machine. The board's `/api/fill` and `/api/cv` endpoints answer only the
+extension and refuse requests from web pages.
+
+### Limits
+
+- Custom dropdowns (not a native select, such as react-select) are not
+  filled. You pick those yourself.
+- Workday asks you to log in first and shows the form over several pages.
+  Click Fill once on each page.
+- You always submit.
+- Tick boxes on forms built with React may look ticked without the page
+  registering it. Check them.
+
 ## Optional LLM fit scoring
 
 The built-in scorer is keyword-based: fast, free, runs on everything, and
@@ -438,7 +531,7 @@ Anthropic and only runs on postings that already cleared the keyword bar.
 
 ## Privacy
 
-`config.local.yaml`, `profile.local.md`, `jobsweep.sqlite3`, `digests/` and
+`config.local.yaml`, `profile.local.md`, `applicant.local.yaml`, `jobsweep.sqlite3`, `digests/` and
 `sweep.log` are gitignored — they hold your real search terms, your CV text, your shortlist
 and your application history. API keys are read from the environment; the tool
 never writes them to a file. If you schedule the sweep, the token lives in

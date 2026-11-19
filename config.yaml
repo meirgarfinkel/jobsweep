@@ -204,7 +204,7 @@ output:
 # "Apply for me" on the review board: the Firefox extension asks the board to
 # draft answers for an application form. Nothing is ever submitted.
 apply:
-  backend: claude_cli          # or "api" (needs ANTHROPIC_API_KEY)
-  applicant_file: applicant.local.yaml
-  profile_file: profile.local.md
+  backend: claude_cli          # uses your Claude Code login; "api" needs ANTHROPIC_API_KEY (about 2-4 cents per fill)
+  applicant_file: applicant.local.yaml   # copy applicant.local.example.yaml; gitignored
+  profile_file: profile.local.md         # background the answers come from; --profile-from-cv drafts it
   timeout: 120                 # seconds before a model call is killed
