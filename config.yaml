@@ -208,4 +208,5 @@ apply:
   applicant_file: applicant.local.yaml   # copy applicant.local.example.yaml; gitignored
   profile_file: profile.local.md         # background the answers come from; --profile-from-cv drafts it
   timeout: 120                 # seconds before a model call is killed
+  style_file: writing_style.md # writing rules for cover letters and other free-text answers
   # extension_origin: moz-extension://<Internal UUID from about:debugging>  # answer only jobsweep, not other add-ons

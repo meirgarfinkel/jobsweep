@@ -32,11 +32,22 @@ OPT_IN = re.compile(
     re.IGNORECASE)
 
 
+# Typography the style rules ban; fixed in code so it never reaches a form.
+_DASH = re.compile(r"\s*[\u2014\u2013]\s*")
+_QUOTES = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'"})
+
+
+def tidy_text(s):
+    """Em/en dashes become commas, curly quotes become straight ones."""
+    s = _DASH.sub(", ", s.translate(_QUOTES))
+    return re.sub(r",\s*([.,;:!?])", r"\1", s)
+
+
 def _sendable(fields):
     return [f for f in fields if f.get("type") not in NOT_FILLED]
 
 
-def build_prompt(job, profile, background, fields):
+def build_prompt(job, profile, background, fields, style=""):
     sent = [{k: f.get(k) for k in ("id", "label", "type", "options", "required", "value")}
             for f in _sendable(fields)]
     return "\n\n".join([
@@ -49,6 +60,8 @@ def build_prompt(job, profile, background, fields):
         f"BACKGROUND\n{(background or '')[:CHAR_LIMIT]}",
         f"FORM FIELDS (JSON)\n{json.dumps(sent, ensure_ascii=False, indent=1)}",
         RULES,
+        *([f"WRITING STYLE for every free-text answer (cover letters, personal notes, "
+           f"why-this-company, about-you)\n{style.strip()}"] if (style or "").strip() else []),
         'Reply with ONLY a JSON object, no other text, shaped exactly like '
         '{"values": {"<field id>": "<answer>"}, "notes": ["<short note for the applicant>"]}. '
         "Use true or false for checkboxes. Put anything the applicant should check by hand in notes.",
@@ -108,6 +121,8 @@ def parse_fill(raw, fields):
             if match is None:
                 continue
             v = match
+        if t in ("text", "textarea"):
+            v = tidy_text(v)
         values[fid] = v
     notes = data.get("notes")
     notes = [str(n) for n in notes if str(n).strip()] if isinstance(notes, list) else []
@@ -116,6 +131,6 @@ def parse_fill(raw, fields):
             "unanswered": [i for i in need if i not in values]}
 
 
-def run(job, profile, background, fields, backend, timeout=120):
-    prompt = build_prompt(job, profile, background, fields)
+def run(job, profile, background, fields, backend, timeout=120, style=""):
+    prompt = build_prompt(job, profile, background, fields, style)
     return parse_fill(llm.ask(prompt, backend, timeout=timeout), fields)

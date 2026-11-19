@@ -391,6 +391,13 @@ submits a form.
 3. Install the extension (below), then run `python jobsweep.py --serve` and
    click **Apply for me** on a card.
 
+Cover letters and other free-text answers follow the writing rules in
+`writing_style.md`: concrete facts tied to the posting, plain words, no
+stock phrases. Point `apply.style_file` in `config.local.yaml` at your own
+rules file to use those instead. Whatever the rules say, the board replaces
+em and en dashes with commas and curly quotes with straight ones before the
+answer reaches the form.
+
 ### Install the extension in Zen or Firefox
 
 **To try it.** Open `about:debugging`, choose This Firefox, then Load

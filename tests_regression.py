@@ -642,5 +642,18 @@ _ct = (_ext / "content.js").read_text(encoding="utf-8")
 check("content only clicks inside setChecked", _ct.count(".click()") == 1
       and _ct.index(".click()") > _ct.index("function setChecked"))
 
+print("#A7 writing style")
+import fill as _fl
+_f7 = [{"id": "js-0", "label": "Why us?", "type": "textarea", "options": [], "required": True, "value": ""}]
+_p7 = _fl.build_prompt({"title": "Backend Developer", "company": "Acme"}, {"name": "A", "email": "a@b.c"},
+                       "bg", _f7, style="No em dashes. Say what you did.")
+check("style rules go into the prompt", "WRITING STYLE" in _p7 and "No em dashes. Say what you did." in _p7)
+check("no style section without a style", "WRITING STYLE" not in _fl.build_prompt({}, {"name": "A", "email": "a@b.c"}, "", _f7))
+check("em dash becomes a comma", _fl.tidy_text("I built it \u2014 fast.") == "I built it, fast.")
+check("curly quotes become straight", _fl.tidy_text("\u201cok\u201d it\u2019s") == "\"ok\" it's")
+_r7 = _fl.parse_fill('{"values": {"js-0": "Python \u2013 mostly backend."}}', _f7)
+check("free-text answers are tidied", _r7["values"].get("js-0") == "Python, mostly backend.")
+check("bundled style file exists", (HERE / "writing_style.md").is_file())
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

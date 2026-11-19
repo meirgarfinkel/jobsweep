@@ -557,9 +557,14 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
                 except OSError:
                     background = ""
                     notes.append("No profile.local.md yet: run python jobsweep.py --profile-from-cv.")
+                try:
+                    style = _path("style_file", "writing_style.md").read_text(encoding="utf-8")
+                except OSError:
+                    style = ""
+                    notes.append("Writing style file not found; answers used no style rules.")
                 res = fill.run(dict(row), profile, background, fields,
                                cfg.get("backend") or "claude_cli",
-                               timeout=int(cfg.get("timeout") or 120))
+                               timeout=int(cfg.get("timeout") or 120), style=style)
             except (applicant.ProfileError, llm.LLMError) as e:
                 self._json(200, {"error": str(e)}, origin)
                 return
