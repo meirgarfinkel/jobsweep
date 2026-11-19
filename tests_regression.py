@@ -310,5 +310,25 @@ check("6-day-old applied card stays",
       not dashboard._too_old(_R(status="applied", posted_at=old), 4))
 check("no limit hides nothing", not dashboard._too_old(_R(status="new", posted_at=old), None))
 
+print("\n#W1 Workday descriptions")
+check("HTML stripped and whitespace collapsed",
+      js._strip_html("<p>5+ years&nbsp;of <b>C++</b></p>\n<ul><li>Linux</li></ul>")
+      == "5+ years of C++ Linux")
+check("description capped", len(js._strip_html("x" * 9000)) == 4000)
+_wj = js.Job(uid="u", title="Senior Software Engineer", company="NVIDIA Corporation",
+             location="Israel", url="", ats="workday")
+_known = {store.job_key("NVIDIA", "senior software engineer")}
+check("already-described req is skipped (key ignores suffix and case)",
+      js._workday_skip(_wj, _known))
+check("new req is fetched", not js._workday_skip(_wj, set()))
+with tempfile.TemporaryDirectory() as d:
+    with store.connect(pathlib.Path(d) / "t.sqlite3") as c:
+        store.upsert(c, js.Job(uid="a", title="Backend Developer", company="Acme",
+                               location="", url="", ats="workday", description="text"))
+        store.upsert(c, js.Job(uid="b", title="Frontend Developer", company="Acme",
+                               location="", url="", ats="workday"))
+        check("keys_with_description lists only described rows",
+              store.keys_with_description(c) == {store.job_key("Acme", "Backend Developer")})
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

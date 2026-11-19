@@ -220,6 +220,20 @@ def _workday_date(posted_on: str | None) -> str:
     return ""
 
 
+def _strip_html(html: str, cap: int = 4000) -> str:
+    """Plain text from a posting's HTML: tags removed, whitespace collapsed."""
+    text = re.sub(r"<[^>]+>", " ", html or "")
+    text = (text.replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&lt;", "<").replace("&gt;", ">"))
+    return re.sub(r"\s+", " ", text).strip()[:cap]
+
+
+def _workday_skip(job: "Job", known_described: set) -> bool:
+    """True when this req is already stored with a description, matched the
+    way main() matches stored rows: by company + title key."""
+    return store.job_key(job.company, job.title) in known_described
+
+
 def _workday_country_facet(facets: list, country: str):
     """(facetParameter, [ids]) selecting `country` in a Workday facets tree,
     or None. Tenants name things differently: some have a country value
@@ -498,12 +512,14 @@ class DirectSource:
         # workday_country: ask Workday for that country's jobs only, using the
         # board's own location facet, instead of reading every req worldwide.
         facets, country = {}, (self.cfg.get("workday_country") or "").strip()
-        def post(body):
-            # Workday answers 429 to quick bursts: pause between pages, and
-            # wait and retry when it asks us to slow down.
+
+        def call(method, url, body=None, pause=1.0):
+            # Workday answers 429 to quick bursts: pause between requests,
+            # and wait and retry when it asks us to slow down.
             for attempt in range(4):
-                time.sleep(1.0 if attempt == 0 else 10 * attempt)
-                r = requests.post(api, json=body, headers=headers, timeout=TIMEOUT)
+                time.sleep(pause if attempt == 0 else 10 * attempt)
+                r = requests.request(method, url, json=body, headers=headers,
+                                     timeout=TIMEOUT)
                 if r.status_code != 429:
                     r.raise_for_status()
                     return r.json()
@@ -511,6 +527,9 @@ class DirectSource:
                 if wait.isdigit():
                     time.sleep(min(int(wait), 60))
             r.raise_for_status()
+
+        def post(body):
+            return call("POST", api, body)
 
         if country:
             first = post({"limit": 1, "offset": 0, "searchText": "",
@@ -539,12 +558,14 @@ class DirectSource:
                 # filtered on so location scoring still sees it.
                 if facets and country.lower() not in loc.lower():
                     loc = f"{loc}, {country}"
-                out.append(Job(
+                job = Job(
                     uid=make_uid(company, title, prefix + path), title=title,
                     company=company, location=loc,
                     url=prefix + path, ats="workday",
                     posted_at=_workday_date(j.get("postedOn")),
-                ))
+                )
+                job._wd_path = path
+                out.append(job)
             offset += page
             if len(posts) < page:
                 break
@@ -552,6 +573,33 @@ class DirectSource:
             print(f"  ! workday {tenant}: returned {len(out)} of {total} "
                   f"postings (max_per_board={self.max_per_board})",
                   file=sys.stderr)
+
+        # The list has no descriptions. Fetch each one once: jobs already
+        # stored with a description are skipped (upsert keeps the stored
+        # text when this run's is empty).
+        base = f"https://{tenant}.{pod}.{domain}.com/wday/cxs/{tenant}/{site}"
+        skip = getattr(self, "known_described", None) or set()
+        fetched = failed = 0
+        for job in out:
+            path = getattr(job, "_wd_path", "")
+            if not path or _workday_skip(job, skip):
+                continue
+            try:
+                info = (call("GET", base + path, pause=0.5)
+                        or {}).get("jobPostingInfo") or {}
+                # 8000, the store's limit: Workday puts requirements late,
+                # often past 4000 characters of company introduction.
+                job.description = _strip_html(info.get("jobDescription") or "",
+                                              cap=8000)
+                start = str(info.get("startDate") or "")
+                if re.fullmatch(r"\d{4}-\d{2}-\d{2}", start) and not job.posted_at:
+                    job.posted_at = start
+                fetched += 1
+            except Exception:
+                failed += 1     # keep the posting; scoring just has less
+        if fetched or failed:
+            print(f"  workday {tenant}: fetched {fetched} descriptions"
+                  + (f", {failed} failed" if failed else ""))
         return out
 
 
@@ -1104,6 +1152,15 @@ def main() -> None:
         return
 
     source = make_source(cfg, light=args.light)
+    # Workday descriptions cost a request each; skip reqs already stored
+    # with one.
+    directs = [x for x in getattr(source, "sources", [source])
+               if isinstance(x, DirectSource)]
+    if directs and Path(db).exists():
+        with store.connect(db) as conn:
+            described = store.keys_with_description(conn)
+        for d in directs:
+            d.known_described = described
     print(f"Sweeping via {cfg['source']['mode']} source…")
     raw = source.fetch()
     swept_total = len(raw)      # before filtering/dedupe, for the digest header

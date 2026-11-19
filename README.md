@@ -234,7 +234,7 @@ for the board behind its link:
 | Greenhouse | `job-boards.greenhouse.io/discord/…`, or a company site with `?gh_jid=…` (the board name is guessed from the company name and confirmed against Greenhouse) | public board API, descriptions included |
 | Lever | `jobs.lever.co/goodleap/…` | public postings API |
 | Ashby | `jobs.ashbyhq.com/pinecone/…` | public job-board API |
-| Workday | `nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/…` | the board's own JSON; `workday_country` asks it for one country only. No descriptions, so the years and stack readers have nothing to read |
+| Workday | `nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/…` | the board's own JSON; `workday_country` asks it for one country only. The list has no descriptions, so each job's description is fetched once (one request per new job) and kept in the database; later runs skip jobs already stored with one |
 | SmartRecruiters | `jobs.smartrecruiters.com/ServiceNow/…` | public postings API, plus one request per local job for its description |
 | Comeet | `comeet.com/jobs/reflectiz/CA.008/…` | added to `comeet_companies.tsv` |
 
