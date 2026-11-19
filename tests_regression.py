@@ -357,5 +357,54 @@ with tempfile.TemporaryDirectory() as d:
     check("facts_text omits cv_path", "cv_path" not in _f)
     check("facts_text includes heard_about_us value", "Company website" in _f)
 
+print("\n#A2 llm backend")
+import llm
+_orig_run = llm.subprocess.run
+_orig_model = os.environ.pop("JOBSWEEP_MODEL", None)
+_orig_key = os.environ.pop("ANTHROPIC_API_KEY", None)
+_calls = []
+def _stub(out="", code=0, err="", exc=None):
+    def run(argv, **kw):
+        _calls.append((argv, kw))
+        if exc: raise exc
+        return subprocess.CompletedProcess(argv, code, out, err)
+    return run
+def _llm_err(**kw):
+    llm.subprocess.run = _stub(**kw)
+    try: llm.ask("x")
+    except llm.LLMError as e: return str(e)
+    return ""
+try:
+    llm.subprocess.run = _stub(out=json.dumps({"result": "hi", "is_error": False}))
+    check("cli returns result", llm.ask("x") == "hi")
+    _argv, _kw = _calls[-1]
+    check("cli argv has -p and empty tools", "-p" in _argv and _argv[_argv.index("--tools") + 1] == "")
+    check("cli prompt passed on stdin", _kw.get("input") == "x")
+    check("no --model without env", "--model" not in _argv)
+    os.environ["JOBSWEEP_MODEL"] = "m"
+    llm.ask("x")
+    _argv = _calls[-1][0]
+    check("JOBSWEEP_MODEL passed as --model", _argv[_argv.index("--model") + 1] == "m")
+    os.environ.pop("JOBSWEEP_MODEL")
+    llm.ask("x", tools="Read")
+    _argv = _calls[-1][0]
+    check("tools keyword passed through", _argv[_argv.index("--tools") + 1] == "Read")
+    check("missing claude -> not installed", "isn't installed" in _llm_err(exc=FileNotFoundError()))
+    check("timeout -> longer than", "longer than" in _llm_err(exc=subprocess.TimeoutExpired("claude", 120)))
+    check("login stderr -> logged in", "logged in" in _llm_err(code=1, err="Please log in"))
+    check("is_error auth result -> logged in",
+          "logged in" in _llm_err(out=json.dumps({"result": "Invalid API key - please login", "is_error": True})))
+    check("other is_error -> LLMError with message",
+          "usage limit" in _llm_err(out=json.dumps({"result": "usage limit reached", "is_error": True})))
+    check("garbage stdout -> LLMError", _llm_err(out="not json") != "")
+    try: llm.ask("x", backend="api"); _ok = False
+    except llm.LLMError as e: _ok = "ANTHROPIC_API_KEY" in str(e)
+    check("api without key -> LLMError", _ok)
+finally:
+    llm.subprocess.run = _orig_run
+    for _k, _v in (("JOBSWEEP_MODEL", _orig_model), ("ANTHROPIC_API_KEY", _orig_key)):
+        if _v is None: os.environ.pop(_k, None)
+        else: os.environ[_k] = _v
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
