@@ -26,11 +26,13 @@ PAGE = """<!doctype html>
   :root {{
     --bg:#f7f7f5; --card:#fff; --ink:#1a1a18; --muted:#6b6b66;
     --line:#e3e3df; --accent:#2f6f4f; --warn:#8a5a1a; --bad:#8a2a2a;
+    --company:#1a1a18; --fresh:#1f7a3f; --stale:#8a6a00;
   }}
   @media (prefers-color-scheme: dark) {{
     :root:not([data-theme="light"]) {{
       --bg:#17181a; --card:#1f2124; --ink:#e9e9e6; --muted:#9a9a94;
       --line:#2e3034; --accent:#6fbf8f; --warn:#d9a44a; --bad:#e06a6a;
+      --company:#f3ecd8; --fresh:#6fd08c; --stale:#e5c04a;
     }}
   }}
   *{{box-sizing:border-box}}
@@ -52,6 +54,8 @@ PAGE = """<!doctype html>
   .t{{font-weight:600;font-size:15px}}
   .t a{{color:inherit;text-decoration:none}} .t a:hover{{text-decoration:underline}}
   .meta{{color:var(--muted);font-size:12.5px;margin-top:3px}}
+  .co{{color:var(--company);font-weight:700}}
+  .fresh{{color:var(--fresh)}} .stale{{color:var(--stale)}}
   .why{{font-size:12.5px;color:var(--muted);margin-top:6px;font-style:italic}}
   .fit{{margin-left:auto;display:flex;gap:7px;align-items:center;flex-shrink:0}}
   .pill{{font-size:11.5px;padding:2px 8px;border-radius:999px;
@@ -165,7 +169,9 @@ def _job_html(r: sqlite3.Row) -> str:
         # Comeet only exposes when a posting was last edited.
         label = ("first seen" if not r["posted_at"]
                  else "updated" if r["ats"] == "comeet" else "posted")
-        posted = (f' · <span title="{esc(dt.isoformat())}">{label} '
+        age = (datetime.now(timezone.utc) - dt).total_seconds()
+        tone = "fresh" if age < 86400 else "stale"
+        posted = (f' · <span class="{tone}" title="{esc(dt.isoformat())}">{label} '
                   f'{esc(_ago(dt, has_time))}</span>')
 
     deets = ""
@@ -189,7 +195,7 @@ def _job_html(r: sqlite3.Row) -> str:
     return f"""<div class="job">
   <div class="top"><span class="t">{link}</span>
     <span class="fit">{fit}<span class="pill">kw {r["score"] if r["score"] is not None else "—"}</span></span></div>
-  <div class="meta">{esc(r["company"] or "")} · {esc(r["location"] or "—")}
+  <div class="meta"><span class="co">{esc(r["company"] or "")}</span> ·{esc(r["location"] or "—")}
     · <code>{esc(r["ats"] or "")}</code>{" · " + esc(r["salary"]) if r["salary"] else ""}
     {posted}</div>
   {f'<div class="why">{esc(reasons)}</div>' if reasons else ""}
