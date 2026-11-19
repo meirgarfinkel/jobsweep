@@ -398,17 +398,18 @@ Temporary Add-on, and pick `extension/manifest.json`. Firefox drops a
 temporary add-on when the browser restarts, so you load it again each time.
 
 **Flatpak browsers** (Zen, Firefox and others installed from Flathub) run in
-a sandbox that can only read `~/Downloads`. The file dialog lets the browser
-read `manifest.json` itself, but not the scripts next to it, so the console
+a sandbox. Its file dialog hands the browser only the one file you pick, so
+loading `manifest.json` loads none of the scripts next to it: the console
 shows "Unable to load script: moz-extension://…/content.js" and the board
-says the extension isn't active. Give the browser read access to the folder,
-then quit and restart it:
+says the extension isn't active. Pack the extension into one file and load
+that instead (pick `jobsweep-extension.xpi` in Load Temporary Add-on):
 
 ```
-flatpak override --user --filesystem=/full/path/to/jobsweep/extension:ro app.zen_browser.zen
+cd extension && zip -r ../jobsweep-extension.xpi manifest.json *.js banner.css
 ```
 
-(Use your browser's Flatpak ID from `flatpak list`.)
+Re-run that command and click Reload in `about:debugging` after any change
+to the extension.
 
 **To keep it.** Firefox normally refuses unsigned add-ons. Two routes:
 

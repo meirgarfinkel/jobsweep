@@ -25,3 +25,4 @@ boards.tsv
 
 # Applicant details for Apply for me (name, contact, CV path)
 applicant.local.yaml
+jobsweep-extension.xpi
