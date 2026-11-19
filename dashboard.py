@@ -11,8 +11,10 @@ import html
 import json
 import sqlite3
 import webbrowser
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import store
 
@@ -92,6 +94,51 @@ async function save(uid, el) {{
 </body></html>"""
 
 
+def _parse_time(s: str | None):
+    """(aware datetime, has_time) from the mixed formats sources send, or
+    (None, False). A naive timestamp is taken as UTC."""
+    s = (s or "").strip()
+    if not s:
+        return None, False
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            dt = datetime.fromisoformat(s[:10])
+        except ValueError:
+            return None, False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt, len(s) > 10
+
+
+def _posted_time(r: sqlite3.Row):
+    dt, has_time = _parse_time(r["posted_at"])
+    if dt is None:
+        dt, has_time = _parse_time(r["first_seen"])
+    return dt, has_time
+
+
+def _ago(dt, has_time: bool) -> str:
+    """'2 hours ago', '3 days and 4 hours ago'; date-only sources get days."""
+    secs = (datetime.now(timezone.utc) - dt).total_seconds()
+    if not has_time:
+        days = int(secs // 86400)
+        return "today" if days <= 0 else (
+            "1 day ago" if days == 1 else f"{days} days ago")
+    if secs < 3600:
+        mins = max(int(secs // 60), 0)
+        return "just now" if mins < 1 else (
+            f"{mins} minute{'s' if mins != 1 else ''} ago")
+    days, rem = divmod(int(secs), 86400)
+    hours = rem // 3600
+    h = f"{hours} hour{'s' if hours != 1 else ''}"
+    if not days:
+        return f"{h} ago"
+    d = f"{days} day{'s' if days != 1 else ''}"
+    return f"{d} ago" if not hours else f"{d} and {h} ago"
+
+
 def _job_html(r: sqlite3.Row) -> str:
     esc = html.escape
     try:
@@ -112,6 +159,14 @@ def _job_html(r: sqlite3.Row) -> str:
     safe_url = r["url"] if (r["url"] or "").startswith(("http://", "https://")) else ""
     link = (f'<a href="{esc(safe_url)}" target="_blank" rel="noopener">{title}</a>'
             if safe_url else title)
+    dt, has_time = _posted_time(r)
+    posted = ""
+    if dt is not None:
+        # Comeet only exposes when a posting was last edited.
+        label = ("first seen" if not r["posted_at"]
+                 else "updated" if r["ats"] == "comeet" else "posted")
+        posted = (f' · <span title="{esc(dt.isoformat())}">{label} '
+                  f'{esc(_ago(dt, has_time))}</span>')
 
     deets = ""
     if r["fit_json"]:
@@ -136,7 +191,7 @@ def _job_html(r: sqlite3.Row) -> str:
     <span class="fit">{fit}<span class="pill">kw {r["score"] if r["score"] is not None else "—"}</span></span></div>
   <div class="meta">{esc(r["company"] or "")} · {esc(r["location"] or "—")}
     · <code>{esc(r["ats"] or "")}</code>{" · " + esc(r["salary"]) if r["salary"] else ""}
-    {" · posted " + esc((r["posted_at"] or "")[:10]) if r["posted_at"] else ""}</div>
+    {posted}</div>
   {f'<div class="why">{esc(reasons)}</div>' if reasons else ""}
   {deets}
   <div class="ctl">
@@ -148,25 +203,55 @@ def _job_html(r: sqlite3.Row) -> str:
 </div>"""
 
 
-def render(db: str | Path, status: str | None) -> str:
+def _newest_first(rows: list, threshold) -> list:
+    """Postings that cleared the bar first, then the rest; newest first in
+    each group, undated ones last."""
+    floor = datetime.min.replace(tzinfo=timezone.utc)
+
+    def key(r):
+        cleared = threshold is None or (r["score"] or 0) >= threshold
+        dt, _ = _posted_time(r)
+        return (not cleared, -(dt or floor).timestamp())
+    return sorted(rows, key=key)
+
+
+def render(db: str | Path, status: str | None, threshold=None,
+           sort: str = "newest") -> str:
     with store.connect(db) as conn:
         rows = store.all_jobs(conn, status)
         counts = store.counts(conn)
         total = sum(counts.values())
         active = total - counts.get("skipped", 0)
-    chips = [f'<a class="chip{"" if status else " on"}" href="/">all {active}</a>']
+    if sort != "score":
+        rows = _newest_first(rows, threshold)
+    sq = "" if sort != "score" else "sort=score"
+
+    def href(st=None, so=None):
+        q = [f"status={st}"] if st else []
+        so = sq if so is None else so
+        if so:
+            q.append(so)
+        return "/?" + "&".join(q) if q else "/"
+    chips = [f'<a class="chip{"" if status else " on"}" href="{href()}">'
+             f'all {active}</a>']
     for s in store.STATUSES:
         n = counts.get(s, 0)
         if n:
             chips.append(f'<a class="chip{" on" if status == s else ""}"'
-                         f' href="/?status={s}">{s} {n}</a>')
+                         f' href="{href(s)}">{s} {n}</a>')
+    chips.append(f'<span class="chip">sort:</span>'
+                 f'<a class="chip{" on" if sort != "score" else ""}" '
+                 f'href="{href(status, "")}">newest</a>'
+                 f'<a class="chip{" on" if sort == "score" else ""}" '
+                 f'href="{href(status, "sort=score")}">best score</a>')
     body = ("".join(_job_html(r) for r in rows) if rows
             else '<div class="empty">Nothing here yet — run a sweep.</div>')
     return PAGE.format(total=active, swept=f"{len(rows)} shown",
                        chips="".join(chips), body=body)
 
 
-def serve(db: str | Path, port: int = 8765, open_browser: bool = True) -> None:
+def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
+          threshold=None) -> None:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # keep the console quiet
             pass
@@ -178,12 +263,12 @@ def serve(db: str | Path, port: int = 8765, open_browser: bool = True) -> None:
             if self.path.split("?", 1)[0] != "/":
                 self.send_error(404)
                 return
-            status = None
-            if "?status=" in self.path:
-                status = self.path.split("?status=", 1)[1].split("&")[0]
-                if status not in store.STATUSES:
-                    status = None
-            page = render(db, status).encode()
+            q = parse_qs(urlsplit(self.path).query)
+            status = (q.get("status") or [None])[0]
+            if status not in store.STATUSES:
+                status = None
+            sort = (q.get("sort") or ["newest"])[0]
+            page = render(db, status, threshold, sort).encode()
             self.send_response(200)
             self.send_header("content-type", "text/html; charset=utf-8")
             self.send_header("content-length", str(len(page)))

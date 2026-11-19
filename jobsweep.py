@@ -620,6 +620,14 @@ def score_job(job: Job, s: dict) -> Job:
         pts += 1
         why.append("location works")
 
+    # scoring.preferred_locations / preferred_bonus: rank one region above
+    # the others, whatever the work arrangement. Only for title matches, so
+    # location alone never lifts an unrelated role over the threshold.
+    pref = s.get("preferred_locations") or []
+    if pref and scored_strong and any(_has(k, loc) for k in pref):
+        pts += int(s.get("preferred_bonus", 2))
+        why.append("preferred location")
+
     # Experience band, as classified by the index.
     if job.experience in ("10+", "5-10"):
         pts += 1
@@ -907,7 +915,8 @@ def main() -> None:
 
     if args.serve:
         import dashboard
-        dashboard.serve(db, args.port)
+        dashboard.serve(db, args.port,
+                        threshold=(cfg.get("scoring") or {}).get("threshold"))
         return
 
     s = cfg["scoring"]
