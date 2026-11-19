@@ -406,5 +406,36 @@ finally:
         if _v is None: os.environ.pop(_k, None)
         else: os.environ[_k] = _v
 
+print("#A3 fill")
+import fill
+_prof = {"name": "Dana Test", "email": "d@example.com", "cv_path": "/x/secret_cv.pdf",
+         "links": {"github": "gh/dana"}, "demographics": {}}
+_flds = [{"id": "n", "label": "Full name", "type": "text", "required": True, "options": [], "value": ""},
+         {"id": "s", "label": "Sponsorship?", "type": "select", "required": True, "options": ["Yes", "No"], "value": ""},
+         {"id": "c", "label": "Agree", "type": "checkbox", "required": False, "options": [], "value": ""},
+         {"id": "f", "label": "Resume", "type": "file", "required": True, "options": [], "value": ""}]
+_pr = fill.build_prompt({"title": "Zebra Wrangler", "company": "Acme", "location": "X", "description": "d"}, _prof, "bg", _flds)
+check("prompt has job title", "Zebra Wrangler" in _pr)
+check("prompt has profile value", "gh/dana" in _pr)
+check("prompt has field label", "Full name" in _pr)
+check("prompt omits cv_path", "cv_path" not in _pr and "secret_cv" not in _pr)
+check("prompt omits file field", "Resume" not in _pr)
+check("prompt has language rule", "language of the question" in _pr)
+_r = fill.parse_fill('ok {"values": {"n": "Dana", "zzz": "x", "s": "Maybe"}, "notes": ["hi"]}', _flds)
+check("parse keeps valid text", _r["values"].get("n") == "Dana")
+check("parse drops unknown id", "zzz" not in _r["values"])
+check("parse drops bad option", "s" not in _r["values"])
+check("bad required select unanswered", _r["unanswered"] == ["s"])
+check("notes kept", _r["notes"] == ["hi"])
+check("yes maps to Yes", fill.parse_fill('{"values": {"s": "yes"}}', _flds)["values"]["s"] == "Yes")
+check("checkbox true string -> True", fill.parse_fill('{"values": {"c": "true"}}', _flds)["values"]["c"] is True)
+_g = fill.parse_fill("sorry", _flds)
+check("garbage -> required unanswered", _g["unanswered"] == ["n", "s"] and _g["values"] == {})
+check("garbage -> note", fill.UNREADABLE in _g["notes"])
+_oa = fill.llm.ask
+fill.llm.ask = lambda prompt, backend="claude_cli", **k: '{"values": {"n": "Dana"}}'
+check("run wires ask and parse", fill.run({"title": "t"}, _prof, "", _flds, "claude_cli")["values"] == {"n": "Dana"})
+fill.llm.ask = _oa
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
