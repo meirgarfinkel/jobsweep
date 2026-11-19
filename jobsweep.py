@@ -238,7 +238,57 @@ class DirectSource:
             jobs += self._guard(self._ashby, slug)
         for url in (self.cfg.get("workday") or []):
             jobs += self._guard(self._workday, url)
+        jobs += self._comeet_all()
         return jobs
+
+    def _comeet_all(self) -> list[Job]:
+        """Comeet companies from `comeet` (list of "slug/uid") and/or
+        `comeet_file` (tab-separated slug, uid). Optional `comeet_countries`
+        keeps only those ISO codes, e.g. [IL]; `comeet_delay` is the pause
+        between companies in seconds."""
+        import comeet
+        pairs = [tuple(x.split("/", 1)) for x in (self.cfg.get("comeet") or [])]
+        if self.cfg.get("comeet_file"):
+            pairs += comeet.load_companies(self.cfg["comeet_file"])
+        limit = self.cfg.get("comeet_limit")
+        if limit:
+            pairs = pairs[:int(limit)]
+        if not pairs:
+            return []
+        countries = {c.upper() for c in (self.cfg.get("comeet_countries") or [])}
+        delay = float(self.cfg.get("comeet_delay", 1.0))
+        out: list[Job] = []
+        before = len(self.failed)
+        self.comeet_inactive: list[str] = []
+        for i, (slug, uid) in enumerate(pairs):
+            if i:
+                comeet.polite_pause(delay)
+            rows = self._guard(self._comeet, f"{slug}/{uid}")
+            for r in rows:
+                if countries and r["country"] not in countries:
+                    continue
+                out.append(Job(
+                    uid=make_uid(r["company"], r["title"], r["url"]),
+                    title=r["title"], company=r["company"],
+                    location=r["location"], url=r["url"], ats="comeet",
+                    posted_at=r["posted_at"], description=r["description"],
+                    arrangement=r["arrangement"], experience=r["experience"],
+                    track="comeet",
+                ))
+        print(f"  comeet: {len(pairs)} companies, {len(out)} postings kept, "
+              f"{len(self.comeet_inactive)} no longer on Comeet, "
+              f"{len(self.failed) - before} failed")
+        return out
+
+    def _comeet(self, pair: str) -> list[dict]:
+        import comeet
+        slug, uid = pair.split("/", 1)
+        try:
+            return comeet.fetch_company(slug, uid,
+                                        {**UA, "Accept": "text/html"}, TIMEOUT)
+        except comeet.Inactive:
+            self.comeet_inactive.append(pair)
+            return []
 
     def _guard(self, fn, arg) -> list[Job]:
         try:
@@ -359,9 +409,28 @@ class DirectSource:
         return out
 
 
+class CombinedSource:
+    """Runs several sources in one sweep and pools their results."""
+
+    def __init__(self, sources: list):
+        self.sources = sources
+
+    def fetch(self) -> list[Job]:
+        out: list[Job] = []
+        self.failed: list[str] = []
+        for s in self.sources:
+            out += s.fetch()
+            self.failed += getattr(s, "failed", [])
+        return out
+
+
 def make_source(cfg: dict):
     src = cfg.get("source") or {}
     mode = src.get("mode")
+    if isinstance(mode, list):
+        # e.g. [indexed, direct]: the paid index plus your own boards.
+        return CombinedSource([make_source({"source": {**src, "mode": m}})
+                               for m in mode])
     if mode not in ("indexed", "direct"):
         sys.exit(f"source.mode must be 'indexed' or 'direct', got {mode!r}")
     block = src.get(mode)
