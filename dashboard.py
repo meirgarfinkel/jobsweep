@@ -15,7 +15,7 @@ import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, quote, urlsplit
 
 import applicant
 import extract
@@ -233,8 +233,11 @@ def apply_url(url: str, ats: str) -> str:
     return u
 
 
-def extension_origin(origin) -> bool:
-    return bool(origin) and origin.startswith("moz-extension://")
+def extension_origin(origin, pinned=None) -> bool:
+    """True for a moz-extension:// origin; with `pinned`, only that one."""
+    if not origin or not origin.startswith("moz-extension://"):
+        return False
+    return not pinned or origin.rstrip("/") == str(pinned).rstrip("/")
 
 
 def _job_html(r: sqlite3.Row) -> str:
@@ -407,15 +410,36 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
         def log_message(self, *a):  # keep the console quiet
             pass
 
+        def _host_ok(self):
+            # A DNS-rebinding page reaches 127.0.0.1 under its own hostname;
+            # refusing any other Host keeps it off every route.
+            port = self.server.server_address[1]
+            return self.headers.get("host") in (f"127.0.0.1:{port}", f"localhost:{port}")
+
         def _origin(self):
+            """The extension's origin to echo in CORS, "" for an extension
+            request that came without Origin, or None to refuse."""
             o = self.headers.get("origin")
-            return o if extension_origin(o) else None
+            if o is None:
+                # Firefox may leave Origin off the background page's GET. A
+                # page can't add this header cross-origin (the preflight is
+                # refused), and the Host check stops same-origin rebinding.
+                return "" if self.headers.get("x-jobsweep-extension") == "1" else None
+            return o if extension_origin(o, cfg.get("extension_origin")) else None
 
         def _cors(self, origin):
+            if not origin:
+                return
             self.send_header("access-control-allow-origin", origin)
             self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
-            self.send_header("access-control-allow-headers", "content-type")
+            self.send_header("access-control-allow-headers", "content-type, x-jobsweep-extension")
             self.send_header("vary", "Origin")
+
+        def _refused(self):
+            if not self._host_ok():
+                self.send_error(403)
+                return True
+            return False
 
         def _json(self, code, obj, origin):
             body = json.dumps(obj, ensure_ascii=False).encode()
@@ -427,6 +451,8 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
             self.wfile.write(body)
 
         def do_OPTIONS(self):
+            if self._refused():
+                return
             if self.path.split("?", 1)[0] not in ("/api/fill", "/api/cv"):
                 self.send_error(404)
                 return
@@ -448,17 +474,20 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
             self.send_response(200)
             self.send_header("content-type", "application/pdf")
             self.send_header("content-length", str(len(data)))
-            self.send_header("x-filename", Path(prof["cv_path"]).name)
+            # Headers are latin-1; percent-encode so a Hebrew name survives.
+            self.send_header("x-filename", quote(Path(prof["cv_path"]).name, safe=""))
             self._cors(origin)
             self.send_header("access-control-expose-headers", "x-filename")
             self.end_headers()
             self.wfile.write(data)
 
         def do_GET(self):
+            if self._refused():
+                return
             route = self.path.split("?", 1)[0]
             if route == "/api/cv":
                 origin = self._origin()
-                if not origin:
+                if origin is None:
                     self.send_error(403)
                     return
                 self._cv(origin)
@@ -490,6 +519,8 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
                 uid, fields = data["uid"], data.get("fields") or []
                 if not isinstance(fields, list):
                     raise ValueError("fields must be a list")
+                if not all(isinstance(f, dict) and isinstance(f.get("id"), str) for f in fields):
+                    raise ValueError("each field must be an object with a string id")
             except Exception as e:
                 self._json(400, {"error": f"Bad request: {e}"}, origin)
                 return
@@ -509,7 +540,7 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
                     notes.append("No profile.local.md yet: run python jobsweep.py --profile-from-cv.")
                 res = fill.run(dict(row), profile, background, fields,
                                cfg.get("backend") or "claude_cli",
-                               timeout=cfg.get("timeout", 120))
+                               timeout=int(cfg.get("timeout") or 120))
             except (applicant.ProfileError, llm.LLMError) as e:
                 self._json(200, {"error": str(e)}, origin)
                 return
@@ -518,9 +549,11 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
             self._json(200, res, origin)
 
         def do_POST(self):
+            if self._refused():
+                return
             if self.path == "/api/fill":
                 origin = self._origin()
-                if not origin:
+                if origin is None:
                     self.send_error(403)
                     return
                 self._fill(origin)

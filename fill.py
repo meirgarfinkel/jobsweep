@@ -1,5 +1,6 @@
 """The fill step: build one prompt for a form, validate the model's answer."""
 import json
+import re
 
 import applicant
 import llm
@@ -16,11 +17,23 @@ RULES = """Rules for your answers:
 - Agreement checkboxes that are required (terms, privacy policy, confirmations) get true. Optional ones (marketing, talent pool, newsletter) get false or are left out.
 - "How did you hear about us" gets the applicant's heard_about_us value.
 - Leave out everything else you can't answer from the facts. Do not guess.
+- If a text field, dropdown or radio group already has a value, leave it out unless the value is clearly a placeholder.
 - Skip file upload fields; the CV is attached separately."""
+
+# Fields the board never answers: file uploads (the extension attaches the CV)
+# and custom dropdowns (the person picks those).
+NOT_FILLED = ("file", "combobox")
+
+# Opt-in boxes the applicant never ticks without looking, whatever the model says.
+OPT_IN = re.compile(
+    r"newsletter|marketing|talent\s+(community|pool|network)|\bupdates?\b|job\s+alerts?"
+    r"|future\s+(opportunit|roles?|positions?|openings?|vacanc)|\bsms\b|text\s+messages?"
+    r"|promotion|ניוזלטר|דיוור|עדכונים",
+    re.IGNORECASE)
 
 
 def _sendable(fields):
-    return [f for f in fields if f.get("type") != "file"]
+    return [f for f in fields if f.get("type") not in NOT_FILLED]
 
 
 def build_prompt(job, profile, background, fields):
@@ -68,13 +81,20 @@ def parse_fill(raw, fields):
     if not isinstance(raw_vals, dict):
         raw_vals = {}
     values = {}
+    dropped = []
     for fid, v in raw_vals.items():
         f = by_id.get(fid)
-        if f is None or f.get("type") == "file" or v is None:
+        if f is None or f.get("type") in NOT_FILLED or v is None:
             continue
         t = f.get("type")
         if t == "checkbox":
-            values[fid] = v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "1", "on")
+            on = v if isinstance(v, bool) else str(v).strip().lower() in ("true", "yes", "1", "on")
+            if on and OPT_IN.search(str(f.get("label") or "")):
+                dropped.append(f"Didn't tick: {f.get('label')}")
+                continue
+            if not on and f.get("required"):
+                continue  # a required box left unticked is the person's call
+            values[fid] = on
             continue
         if isinstance(v, (dict, list)):
             continue
@@ -91,6 +111,7 @@ def parse_fill(raw, fields):
         values[fid] = v
     notes = data.get("notes")
     notes = [str(n) for n in notes if str(n).strip()] if isinstance(notes, list) else []
+    notes += dropped
     return {"values": values, "notes": notes,
             "unanswered": [i for i in need if i not in values]}
 

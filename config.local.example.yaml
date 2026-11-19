@@ -116,3 +116,4 @@ apply:
   applicant_file: applicant.local.yaml
   profile_file: profile.local.md
   timeout: 120                 # seconds before a model call is killed
+  # extension_origin: moz-extension://<Internal UUID from about:debugging>  # answer only jobsweep, not other add-ons

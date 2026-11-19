@@ -389,6 +389,17 @@ try:
     llm.ask("x", tools="Read")
     _argv = _calls[-1][0]
     check("tools keyword passed through", _argv[_argv.index("--tools") + 1] == "Read")
+    for _flag in ("--strict-mcp-config", "--no-session-persistence", "--safe-mode", "--restricted"):
+        check(f"cli argv has {_flag}", _flag in _argv)
+    check("cli denies permission prompts", _argv[_argv.index("--permission-prompts") + 1] == "none")
+    check("cli has no --mcp-config", "--mcp-config" not in _argv)
+    _cwd = _calls[-1][1].get("cwd")
+    check("cli runs from a temp dir", bool(_cwd) and pathlib.Path(_cwd).name.startswith("jobsweep-")
+          and not pathlib.Path(_cwd).exists())
+    check("no --add-dir by default", "--add-dir" not in _argv)
+    llm.ask("x", tools="Read", add_dirs=["/some/dir"])
+    _argv = _calls[-1][0]
+    check("add_dirs passed as --add-dir", _argv[_argv.index("--add-dir") + 1] == "/some/dir")
     check("missing claude -> not installed", "isn't installed" in _llm_err(exc=FileNotFoundError()))
     check("timeout -> longer than", "longer than" in _llm_err(exc=subprocess.TimeoutExpired("claude", 120)))
     check("login stderr -> logged in", "logged in" in _llm_err(code=1, err="Please log in"))
@@ -429,6 +440,26 @@ check("bad required select unanswered", _r["unanswered"] == ["s"])
 check("notes kept", _r["notes"] == ["hi"])
 check("yes maps to Yes", fill.parse_fill('{"values": {"s": "yes"}}', _flds)["values"]["s"] == "Yes")
 check("checkbox true string -> True", fill.parse_fill('{"values": {"c": "true"}}', _flds)["values"]["c"] is True)
+_cb = [{"id": "m", "label": "Keep me in your talent community for future roles", "type": "checkbox",
+        "required": False, "options": [], "value": False},
+       {"id": "nl", "label": "Send me the newsletter", "type": "checkbox", "required": False, "options": [], "value": False},
+       {"id": "sms", "label": "I agree to receive SMS updates *", "type": "checkbox", "required": True, "options": [], "value": False},
+       {"id": "ok", "label": "I confirm the information is accurate *", "type": "checkbox",
+        "required": True, "options": [], "value": False},
+       {"id": "ok2", "label": "I accept the privacy policy *", "type": "checkbox", "required": True, "options": [], "value": False},
+       {"id": "dl", "label": "I have a driving licence", "type": "checkbox", "required": False, "options": [], "value": False},
+       {"id": "cb", "label": "Country *", "type": "combobox", "required": True, "options": [], "value": ""}]
+_rc = fill.parse_fill('{"values": {"m": true, "nl": "yes", "sms": true, "ok": false, "dl": true, "cb": "Israel"}}', _cb)
+check("opt-in talent community never ticked", "m" not in _rc["values"])
+check("opt-in newsletter never ticked", "nl" not in _rc["values"])
+check("required opt-in-looking box not ticked, flagged", "sms" not in _rc["values"] and "sms" in _rc["unanswered"])
+check("opt-in drop noted", any("talent community" in n for n in _rc["notes"]))
+check("required checkbox false -> unanswered", "ok" not in _rc["values"] and "ok" in _rc["unanswered"])
+check("required checkbox missing -> unanswered", "ok2" in _rc["unanswered"])
+check("ordinary optional box can be ticked", _rc["values"].get("dl") is True)
+check("combobox never answered, flagged", "cb" not in _rc["values"] and "cb" in _rc["unanswered"])
+check("combobox not sent to the model", "Country" not in fill.build_prompt({}, _prof, "", _cb))
+check("required checkbox true kept", fill.parse_fill('{"values": {"ok": true}}', _cb)["values"].get("ok") is True)
 _g = fill.parse_fill("sorry", _flds)
 check("garbage -> required unanswered", _g["unanswered"] == ["n", "s"] and _g["values"] == {})
 check("garbage -> note", fill.UNREADABLE in _g["notes"])
@@ -451,14 +482,16 @@ check("apply_url greenhouse unchanged", dashboard.apply_url("https://boards.gree
 check("extension_origin ok", dashboard.extension_origin("moz-extension://abc") is True)
 check("extension_origin web", not dashboard.extension_origin("https://evil.example"))
 check("extension_origin none", not dashboard.extension_origin(None))
+check("extension_origin pinned match", dashboard.extension_origin("moz-extension://abc", "moz-extension://abc/"))
+check("extension_origin pinned other", not dashboard.extension_origin("moz-extension://zzz", "moz-extension://abc"))
 _of, _ol = dashboard.fill.run, dashboard.applicant.load
 dashboard.fill.run = lambda *a, **k: {"values": {}, "notes": [], "unanswered": []}
 dashboard.applicant.load = lambda p: {"cv_path": "/nonexistent.pdf"}
 _srv = dashboard.make_server(_dbA, 0, apply_cfg={"profile_file": "/nonexistent-profile.md"})
 _port = _srv.server_address[1]
 _th.Thread(target=_srv.serve_forever, daemon=True).start()
-def _req(path, method="GET", origin=None, body=None):
-    h = {"content-type": "application/json"}
+def _req(path, method="GET", origin=None, body=None, headers=None):
+    h = {"content-type": "application/json", **(headers or {})}
     if origin: h["Origin"] = origin
     rq = _ur.Request(f"http://127.0.0.1:{_port}{path}", method=method, headers=h,
                      data=json.dumps(body).encode() if body is not None else None)
@@ -484,6 +517,36 @@ try:
     check("options ext 204", _req("/api/fill", "OPTIONS", "moz-extension://x")[0] == 204)
     check("options web 403", _req("/api/cv", "OPTIONS", "https://evil.example")[0] == 403)
     check("board has applyme button", b'class="applyme"' in _req("/")[1])
+    _X = {"X-Jobsweep-Extension": "1"}
+    _evil = {"Host": f"evil.example:{_port}"}
+    check("bad host 403 on board", _req("/", headers=_evil)[0] == 403)
+    check("bad host 403 even with header", _req("/api/cv", headers={**_evil, **_X})[0] == 403)
+    check("bad host 403 on fill", _req("/api/fill", "POST", "moz-extension://x", _b, headers=_evil)[0] == 403)
+    check("bad host 403 on status", _req("/api/status", "POST", None, {"uid": "a4u", "status": "applied"},
+                                         headers=_evil)[0] == 403)
+    check("localhost host allowed", _req("/", headers={"Host": f"localhost:{_port}"})[0] == 200)
+    check("cv no origin no header 403", _req("/api/cv")[0] == 403)
+    check("cv page origin + header 403", _req("/api/cv", "GET", "https://evil.example", headers=_X)[0] == 403)
+    check("fill page origin + header 403", _req("/api/fill", "POST", "https://evil.example", _b, headers=_X)[0] == 403)
+    _cvd = pathlib.Path(tempfile.mkdtemp()) / "קורות חיים – Dana.pdf"
+    _cvd.write_bytes(b"%PDF-1.4 hebrew")
+    dashboard.applicant.load = lambda p: {"cv_path": str(_cvd)}
+    _s, _d, _h = _req("/api/cv", headers=_X)
+    check("cv no origin + header allowed", _s == 200 and _d == b"%PDF-1.4 hebrew")
+    check("cv no origin: no CORS echo", _h.get("access-control-allow-origin") is None)
+    from urllib.parse import unquote as _uq
+    check("hebrew cv filename percent-encoded", _uq(_h.get("x-filename") or "") == _cvd.name
+          and (_h.get("x-filename") or "").isascii())
+    _s, _d, _h = _req("/api/cv", "GET", "moz-extension://x")
+    check("cv ext origin 200", _s == 200 and _h.get("access-control-allow-origin") == "moz-extension://x")
+    _s, _d, _ = _req("/api/fill", "POST", None, _b, headers=_X)
+    check("fill no origin + header allowed", _s == 200)
+    _s, _d, _ = _req("/api/fill", "POST", "moz-extension://x", {"uid": "a4u", "fields": ["x"]})
+    check("fill malformed field 400", _s == 400 and "string id" in json.loads(_d)["error"])
+    _s, _d, _ = _req("/api/fill", "POST", "moz-extension://x", {"uid": "a4u", "fields": [{"label": "no id"}]})
+    check("fill field without id 400", _s == 400)
+    _, _, _h = _req("/api/fill", "OPTIONS", "moz-extension://x")
+    check("preflight allows extension header", "x-jobsweep-extension" in (_h.get("access-control-allow-headers") or ""))
 finally:
     _srv.shutdown(); _srv.server_close()
     dashboard.fill.run, dashboard.applicant.load = _of, _ol
@@ -494,9 +557,11 @@ _d5 = pathlib.Path(_tf5.mkdtemp())
 _orig_ask = llm.ask
 _ol5 = applicant.HERE
 _asks = []
-def _ask5(prompt, backend="claude_cli", timeout=120, tools="", pdf_path=None):
-    _asks.append(dict(prompt=prompt, backend=backend, timeout=timeout, tools=tools, pdf_path=pdf_path))
-    return "# Background\nWorked at X."
+_reply5 = ["# Background\nWorked at X."]
+def _ask5(prompt, backend="claude_cli", timeout=120, tools="", pdf_path=None, add_dirs=()):
+    _asks.append(dict(prompt=prompt, backend=backend, timeout=timeout, tools=tools, pdf_path=pdf_path,
+                      add_dirs=list(add_dirs)))
+    return _reply5[0]
 try:
     (_d5 / "cv.pdf").write_bytes(b"%PDF-1.4 dummy")
     (_d5 / "applicant.local.yaml").write_text("name: A B\nemail: a@b.c\ncv_path: cv.pdf\n")
@@ -509,10 +574,17 @@ try:
     check("cli got tools=Read", _asks[-1]["tools"] == "Read")
     check("prompt names abs cv path", str(_d5 / "cv.pdf") in _asks[-1]["prompt"])
     check("cv timeout at least 300", _asks[-1]["timeout"] >= 300)
+    check("cli may read the cv folder", _asks[-1]["add_dirs"] == [str(_d5)])
     _o.write_text("my edits")
     _o2 = js.run_profile_from_cv(_cfg5)
     check("second run writes .new", _o2.name == "profile.local.md.new" and "# Background" in _o2.read_text())
     check("original untouched", _o.read_text() == "my edits")
+    _o2.unlink()
+    _reply5[0] = "I don't have permission to read that file."
+    try: js.run_profile_from_cv(_cfg5); _re = False
+    except llm.LLMError: _re = True
+    check("refusal reply raises, nothing saved", _re and not _o2.exists() and _o.read_text() == "my edits")
+    _reply5[0] = "# Background\nWorked at X."
     (_d5 / "applicant.local.yaml").write_text("name: ''\n")
     try: js.run_profile_from_cv(_cfg5); _pe = False
     except applicant.ProfileError: _pe = True
@@ -534,6 +606,11 @@ try:
               and "\n" not in _c[0]["source"]["data"] and _c[1] == {"type": "text", "text": "p"})
         llm.ask("p", "api")
         check("api without pdf sends plain string", _sent["b"]["messages"][0]["content"] == "p")
+        check("api max_tokens room for long fills", _sent["b"]["max_tokens"] >= 8000)
+        _R.read = lambda self: b'{"content":[{"text":"{\\"values\\""}],"stop_reason":"max_tokens"}'
+        try: llm.ask("p", "api"); _cut = ""
+        except llm.LLMError as e: _cut = str(e)
+        check("api cut-off answer -> LLMError", "cut off" in _cut)
     finally:
         llm.urllib.request.urlopen = _ou; os.environ.pop("ANTHROPIC_API_KEY", None)
     llm.ask = _ask5
@@ -558,6 +635,12 @@ _js = sorted(_ext.glob("**/*.js")) if _ext.is_dir() else []
 check("extension has js files", len(_js) >= 3)
 _sub = [f.name for f in _js if "submit(" in (_t := f.read_text(encoding="utf-8")) or "requestSubmit" in _t]
 check("no js file submits a form", not _sub, str(_sub))
+_bg = (_ext / "background.js").read_text(encoding="utf-8")
+check("background sends extension header on both fetches", _bg.count("...EXT_HEADER") + _bg.count("headers: EXT_HEADER") == 2)
+check("background decodes x-filename", "decodeURIComponent" in _bg)
+_ct = (_ext / "content.js").read_text(encoding="utf-8")
+check("content only clicks inside setChecked", _ct.count(".click()") == 1
+      and _ct.index(".click()") > _ct.index("function setChecked"))
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
