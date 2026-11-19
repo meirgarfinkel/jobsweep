@@ -397,6 +397,19 @@ submits a form.
 Temporary Add-on, and pick `extension/manifest.json`. Firefox drops a
 temporary add-on when the browser restarts, so you load it again each time.
 
+**Flatpak browsers** (Zen, Firefox and others installed from Flathub) run in
+a sandbox that can only read `~/Downloads`. The file dialog lets the browser
+read `manifest.json` itself, but not the scripts next to it, so the console
+shows "Unable to load script: moz-extension://…/content.js" and the board
+says the extension isn't active. Give the browser read access to the folder,
+then quit and restart it:
+
+```
+flatpak override --user --filesystem=/full/path/to/jobsweep/extension:ro app.zen_browser.zen
+```
+
+(Use your browser's Flatpak ID from `flatpak list`.)
+
 **To keep it.** Firefox normally refuses unsigned add-ons. Two routes:
 
 1. In `about:config`, set `xpinstall.signatures.required` to `false`. Some
