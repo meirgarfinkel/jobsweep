@@ -107,12 +107,31 @@ async function save(uid, el) {{
 
 // Hand the job to the Firefox extension if it is installed; otherwise open
 // the form in a new tab and let the extension pick it up from the hash.
+// The extension's board.js marks <html> as soon as it runs; without the mark
+// the board says so instead of failing silently.
+const hasExt = () => document.documentElement.hasAttribute('data-jobsweep-ext');
+function extWarning() {{
+  if (hasExt() || document.getElementById('extwarn')) return;
+  const d = document.createElement('div');
+  d.id = 'extwarn';
+  d.textContent = 'The jobsweep extension is not active on this page, so Apply for me ' +
+    'can only open the job, not link it for filling. Load the extension, then reload this page.';
+  d.style.cssText = 'background:#7a4b00;color:#fff;padding:8px 12px;font-size:13px';
+  document.body.prepend(d);
+}}
+window.addEventListener('load', () => setTimeout(extWarning, 500));
+
 document.addEventListener('click', (e) => {{
   const b = e.target.closest('.applyme');
   if (!b) return;
   const uid = b.dataset.uid, url = b.dataset.url;
+  if (!hasExt()) {{
+    extWarning();
+    window.open(url + '#jobsweep=' + uid, '_blank', 'noopener');
+    return;
+  }}
   let opened = false;
-  const on = (m) => {{ if (m.source === window && m.data && m.data.jobsweep === 'opened') opened = true; }};
+  const on = (m) => {{ if (m.origin === location.origin && m.data && m.data.jobsweep === 'opened') opened = true; }};
   window.addEventListener('message', on);
   window.postMessage({{jobsweep: 'open', uid, url}}, location.origin);
   setTimeout(() => {{
