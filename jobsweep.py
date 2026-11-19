@@ -1137,7 +1137,8 @@ def main() -> None:
         import dashboard
         dashboard.serve(db, args.port,
                         threshold=(cfg.get("scoring") or {}).get("threshold"),
-                        max_age_days=(cfg.get("board") or {}).get("max_age_days"))
+                        max_age_days=(cfg.get("board") or {}).get("max_age_days"),
+                        apply_cfg=cfg.get("apply"))
         return
 
     s = cfg["scoring"]

@@ -17,7 +17,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import applicant
 import extract
+import fill
+import llm
 import store
 
 PAGE = """<!doctype html>
@@ -55,6 +58,7 @@ PAGE = """<!doctype html>
   .top{{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}}
   .t{{font-weight:600;font-size:15px}}
   .t a{{color:inherit;text-decoration:none}} .t a:hover{{text-decoration:underline}}
+  .applyme{{margin-left:8px;font-size:12px;padding:1px 8px;cursor:pointer}}
   .meta{{color:var(--muted);font-size:12.5px;margin-top:3px}}
   .co{{color:var(--company);font-weight:700}}
   .fresh{{color:var(--fresh)}} .stale{{color:var(--stale)}}
@@ -100,6 +104,22 @@ async function save(uid, el) {{
   flag.style.opacity = 1;
   setTimeout(()=>{{flag.style.opacity=0}}, 1400);
 }}
+
+// Hand the job to the Firefox extension if it is installed; otherwise open
+// the form in a new tab and let the extension pick it up from the hash.
+document.addEventListener('click', (e) => {{
+  const b = e.target.closest('.applyme');
+  if (!b) return;
+  const uid = b.dataset.uid, url = b.dataset.url;
+  let opened = false;
+  const on = (m) => {{ if (m.source === window && m.data && m.data.jobsweep === 'opened') opened = true; }};
+  window.addEventListener('message', on);
+  window.postMessage({{jobsweep: 'open', uid, url}}, location.origin);
+  setTimeout(() => {{
+    window.removeEventListener('message', on);
+    if (!opened) window.open(url + '#jobsweep=' + uid, '_blank', 'noopener');
+  }}, 300);
+}});
 
 // Same wording as the server's _ago(), computed against the viewer's clock.
 function plural(n, unit) {{ return n + ' ' + unit + (n === 1 ? '' : 's'); }}
@@ -202,6 +222,21 @@ def _facts(uid: str, desc: str):
     return _FACTS[key]
 
 
+def apply_url(url: str, ats: str) -> str:
+    """The page that holds the application form, where the ATS splits it off."""
+    u = url or ""
+    base = u.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    if u.startswith("https://jobs.lever.co/") and not base.endswith("/apply"):
+        return base + "/apply"
+    if u.startswith("https://jobs.ashbyhq.com/") and not base.endswith("/application"):
+        return base + "/application"
+    return u
+
+
+def extension_origin(origin) -> bool:
+    return bool(origin) and origin.startswith("moz-extension://")
+
+
 def _job_html(r: sqlite3.Row) -> str:
     esc = html.escape
     try:
@@ -222,6 +257,10 @@ def _job_html(r: sqlite3.Row) -> str:
     safe_url = r["url"] if (r["url"] or "").startswith(("http://", "https://")) else ""
     link = (f'<a href="{esc(safe_url)}" target="_blank" rel="noopener">{title}</a>'
             if safe_url else title)
+    if safe_url:
+        link += (f' <button class="applyme" data-uid="{esc(r["uid"])}" '
+                 f'data-url="{esc(apply_url(safe_url, r["ats"] or ""))}">'
+                 f'Apply for me</button>')
     years, stack = _facts(r["uid"], r["description"] or "")
     facts = ""
     if years is not None:
@@ -355,17 +394,79 @@ def render(db: str | Path, status: str | None, threshold=None,
                        chips="".join(chips), body=body, max_age_ms=max_ms)
 
 
-def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
-          threshold=None, max_age_days=None) -> None:
+def make_server(db: str | Path, port: int = 8765, threshold=None,
+                max_age_days=None, apply_cfg: dict | None = None):
+    cfg = apply_cfg or {}
+    repo = Path(__file__).resolve().parent
+
+    def _path(key, default):
+        p = Path(cfg.get(key) or default).expanduser()
+        return p if p.is_absolute() else repo / p
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # keep the console quiet
             pass
 
+        def _origin(self):
+            o = self.headers.get("origin")
+            return o if extension_origin(o) else None
+
+        def _cors(self, origin):
+            self.send_header("access-control-allow-origin", origin)
+            self.send_header("access-control-allow-methods", "GET, POST, OPTIONS")
+            self.send_header("access-control-allow-headers", "content-type")
+            self.send_header("vary", "Origin")
+
+        def _json(self, code, obj, origin):
+            body = json.dumps(obj, ensure_ascii=False).encode()
+            self.send_response(code)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("content-length", str(len(body)))
+            self._cors(origin)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_OPTIONS(self):
+            if self.path.split("?", 1)[0] not in ("/api/fill", "/api/cv"):
+                self.send_error(404)
+                return
+            origin = self._origin()
+            if not origin:
+                self.send_error(403)
+                return
+            self.send_response(204)
+            self._cors(origin)
+            self.end_headers()
+
+        def _cv(self, origin):
+            try:
+                prof = applicant.load(_path("applicant_file", "applicant.local.yaml"))
+                data = Path(prof["cv_path"]).read_bytes()
+            except (applicant.ProfileError, OSError, KeyError) as e:
+                self._json(404, {"error": str(e)}, origin)
+                return
+            self.send_response(200)
+            self.send_header("content-type", "application/pdf")
+            self.send_header("content-length", str(len(data)))
+            self.send_header("x-filename", Path(prof["cv_path"]).name)
+            self._cors(origin)
+            self.send_header("access-control-expose-headers", "x-filename")
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_GET(self):
+            route = self.path.split("?", 1)[0]
+            if route == "/api/cv":
+                origin = self._origin()
+                if not origin:
+                    self.send_error(403)
+                    return
+                self._cv(origin)
+                return
             # Only the board itself. Browsers also ask for /favicon.ico on
             # every load, and answering that with a full render doubled the
             # database reads per page view.
-            if self.path.split("?", 1)[0] != "/":
+            if route != "/":
                 self.send_error(404)
                 return
             q = parse_qs(urlsplit(self.path).query)
@@ -382,7 +483,47 @@ def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
             self.end_headers()
             self.wfile.write(page)
 
+        def _fill(self, origin):
+            try:
+                n = int(self.headers.get("content-length") or 0)
+                data = json.loads(self.rfile.read(n) or b"{}")
+                uid, fields = data["uid"], data.get("fields") or []
+                if not isinstance(fields, list):
+                    raise ValueError("fields must be a list")
+            except Exception as e:
+                self._json(400, {"error": f"Bad request: {e}"}, origin)
+                return
+            with store.connect(db) as conn:
+                row = conn.execute("SELECT * FROM jobs WHERE uid = ?", (uid,)).fetchone()
+            if row is None:
+                self._json(404, {"error": "This job isn't in the database."}, origin)
+                return
+            notes = []
+            try:
+                profile = applicant.load(_path("applicant_file", "applicant.local.yaml"))
+                try:
+                    background = _path("profile_file", "profile.local.md").read_text(
+                        encoding="utf-8")
+                except OSError:
+                    background = ""
+                    notes.append("No profile.local.md yet: run python jobsweep.py --profile-from-cv.")
+                res = fill.run(dict(row), profile, background, fields,
+                               cfg.get("backend") or "claude_cli")
+            except (applicant.ProfileError, llm.LLMError) as e:
+                self._json(200, {"error": str(e)}, origin)
+                return
+            if notes:
+                res = dict(res, notes=list(res.get("notes") or []) + notes)
+            self._json(200, res, origin)
+
         def do_POST(self):
+            if self.path == "/api/fill":
+                origin = self._origin()
+                if not origin:
+                    self.send_error(403)
+                    return
+                self._fill(origin)
+                return
             if self.path != "/api/status":
                 self.send_error(404)
                 return
@@ -403,6 +544,12 @@ def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
             self.send_response(204)
             self.end_headers()
 
+    return ThreadingHTTPServer(("127.0.0.1", port), Handler)
+
+
+def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
+          threshold=None, max_age_days=None, apply_cfg: dict | None = None) -> None:
+    server = make_server(db, port, threshold, max_age_days, apply_cfg)
     # Read stack and years out of every description now, so the first page
     # load does not wait for it.
     threading.Thread(target=lambda: render(db, None, threshold),
@@ -415,4 +562,4 @@ def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
             webbrowser.open(url)
         except Exception:
             pass
-    ThreadingHTTPServer(("127.0.0.1", port), Handler).serve_forever()
+    server.serve_forever()

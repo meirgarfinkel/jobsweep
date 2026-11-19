@@ -437,5 +437,56 @@ fill.llm.ask = lambda prompt, backend="claude_cli", **k: '{"values": {"n": "Dana
 check("run wires ask and parse", fill.run({"title": "t"}, _prof, "", _flds, "claude_cli")["values"] == {"n": "Dana"})
 fill.llm.ask = _oa
 
+print("\n#A4 server")
+import threading as _th, urllib.request as _ur, urllib.error as _ue
+_dbA = pathlib.Path(tempfile.mkdtemp()) / "a4.sqlite3"
+with store.connect(_dbA) as _c:
+    store.upsert(_c, js.Job(uid="a4u", title="Role", company="Acme", location="L",
+                            url="https://jobs.lever.co/acme/123", ats="lever", description="d"))
+check("apply_url lever", dashboard.apply_url("https://jobs.lever.co/acme/123", "lever").endswith("/apply"))
+check("apply_url lever idempotent", dashboard.apply_url("https://jobs.lever.co/acme/123/apply", "lever") == "https://jobs.lever.co/acme/123/apply")
+check("apply_url ashby", dashboard.apply_url("https://jobs.ashbyhq.com/acme/123", "ashby").endswith("/application"))
+check("apply_url ashby idempotent", dashboard.apply_url("https://jobs.ashbyhq.com/acme/123/application", "ashby").endswith("/123/application"))
+check("apply_url greenhouse unchanged", dashboard.apply_url("https://boards.greenhouse.io/acme/jobs/1", "greenhouse") == "https://boards.greenhouse.io/acme/jobs/1")
+check("extension_origin ok", dashboard.extension_origin("moz-extension://abc") is True)
+check("extension_origin web", not dashboard.extension_origin("https://evil.example"))
+check("extension_origin none", not dashboard.extension_origin(None))
+_of, _ol = dashboard.fill.run, dashboard.applicant.load
+dashboard.fill.run = lambda *a, **k: {"values": {}, "notes": [], "unanswered": []}
+dashboard.applicant.load = lambda p: {"cv_path": "/nonexistent.pdf"}
+_srv = dashboard.make_server(_dbA, 0, apply_cfg={"profile_file": "/nonexistent-profile.md"})
+_port = _srv.server_address[1]
+_th.Thread(target=_srv.serve_forever, daemon=True).start()
+def _req(path, method="GET", origin=None, body=None):
+    h = {"content-type": "application/json"}
+    if origin: h["Origin"] = origin
+    rq = _ur.Request(f"http://127.0.0.1:{_port}{path}", method=method, headers=h,
+                     data=json.dumps(body).encode() if body is not None else None)
+    try:
+        with _ur.urlopen(rq) as r: return r.status, r.read(), r.headers
+    except _ue.HTTPError as e: return e.code, e.read(), e.headers
+try:
+    _b = {"uid": "a4u", "url": "u", "fields": []}
+    check("fill web origin 403", _req("/api/fill", "POST", "https://evil.example", _b)[0] == 403)
+    check("fill no origin 403", _req("/api/fill", "POST", None, _b)[0] == 403)
+    _s, _d, _h = _req("/api/fill", "POST", "moz-extension://x", _b)
+    check("fill ext 200 with values", _s == 200 and "values" in json.loads(_d))
+    check("fill echoes cors origin", _h.get("access-control-allow-origin") == "moz-extension://x")
+    check("fill notes missing profile", any("profile-from-cv" in n for n in json.loads(_d)["notes"]))
+    _s, _d, _ = _req("/api/fill", "POST", "moz-extension://x", {"uid": "nope", "fields": []})
+    check("fill unknown uid 404", _s == 404 and "isn't in the database" in json.loads(_d)["error"])
+    def _bad(*a, **k): raise dashboard.llm.LLMError("Claude Code isn't logged in")
+    dashboard.fill.run = _bad
+    _s, _d, _ = _req("/api/fill", "POST", "moz-extension://x", _b)
+    check("fill LLMError -> 200 error", _s == 200 and json.loads(_d)["error"] == "Claude Code isn't logged in")
+    check("cv web origin 403", _req("/api/cv", "GET", "https://evil.example")[0] == 403)
+    check("cv no origin 403", _req("/api/cv")[0] == 403)
+    check("options ext 204", _req("/api/fill", "OPTIONS", "moz-extension://x")[0] == 204)
+    check("options web 403", _req("/api/cv", "OPTIONS", "https://evil.example")[0] == 403)
+    check("board has applyme button", b'class="applyme"' in _req("/")[1])
+finally:
+    _srv.shutdown(); _srv.server_close()
+    dashboard.fill.run, dashboard.applicant.load = _of, _ol
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

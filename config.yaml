@@ -200,3 +200,11 @@ output:
 #     locations_ok: [your-state, nearby-city]
 #     waive_location_salary: 150000
 # ─────────────────────────────────────────────────────────────────────────
+
+# "Apply for me" on the review board: the Firefox extension asks the board to
+# draft answers for an application form. Nothing is ever submitted.
+apply:
+  backend: claude_cli          # or "api" (needs ANTHROPIC_API_KEY)
+  applicant_file: applicant.local.yaml
+  profile_file: profile.local.md
+  timeout: 120                 # seconds before a model call is killed

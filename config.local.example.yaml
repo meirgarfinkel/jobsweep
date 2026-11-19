@@ -108,3 +108,11 @@ scoring:
   # core title (3) + "engineer" (1) + home (1) = 5 clears; a title match in
   # a remote role scores 6; an on-site role abroad stays below 5.
   threshold: 5
+
+# "Apply for me" on the review board: the Firefox extension asks the board to
+# draft answers for an application form. Nothing is ever submitted.
+apply:
+  backend: claude_cli          # or "api" (needs ANTHROPIC_API_KEY)
+  applicant_file: applicant.local.yaml
+  profile_file: profile.local.md
+  timeout: 120                 # seconds before a model call is killed
