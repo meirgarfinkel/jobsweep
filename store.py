@@ -8,6 +8,7 @@ each role.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -80,6 +81,28 @@ def connect(path: str | Path):
 
 def known_uids(conn) -> set[str]:
     return {r[0] for r in conn.execute("SELECT uid FROM jobs")}
+
+
+_SUFFIX = re.compile(r"\b(inc|ltd|llc|corp|corporation|co|technologies|"
+                     r"software|group|limited)\b\.?")
+
+
+def job_key(company: str, title: str) -> tuple[str, str]:
+    """Company + title, loosened enough that "Check Point Software
+    Technologies Ltd" and "Check Point" name the same employer."""
+    c = _SUFFIX.sub("", (company or "").lower())
+    c = re.sub(r"[^a-z0-9א-ת]+", "", c)
+    t = re.sub(r"\s+", " ", (title or "").lower()).strip()
+    return c, t
+
+
+def uids_by_key(conn) -> dict[tuple[str, str], str]:
+    """First stored uid for each company + title."""
+    out: dict[tuple[str, str], str] = {}
+    for uid, company, title in conn.execute(
+            "SELECT uid, company, title FROM jobs ORDER BY first_seen"):
+        out.setdefault(job_key(company, title), uid)
+    return out
 
 
 def upsert(conn, job, status: str = "new") -> bool:

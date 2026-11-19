@@ -139,6 +139,15 @@ has a table of every setting. Settings this fork adds:
   country is acceptable; the rule below is about commuting.
 - After any scoring change, `python jobsweep.py --rescore` re-scores what is
   already stored, so the board reflects it without a new sweep.
+- `source.direct.boards_file` / `board_locations` / `workday_country`: after
+  each paid sweep, the boards behind postings located in `board_locations`
+  (Greenhouse, Lever, Ashby, Workday, SmartRecruiters) are added to
+  `boards.tsv` and read free on every later run. Set `board_locations` to
+  the places they'd work (the template reuses it as `locations_ok` via a
+  YAML anchor) and `workday_country` to their country. After the first
+  real sweep, run `python jobsweep.py --harvest` to seed the list.
+- `board.max_age_days`: hide untouched cards older than N days on the
+  board. Ask whether they want this.
 
 **Upstream's approach,** if not using the template: model the file on `config.yaml`, which has two tracks:
 track 1 matches titles that are unambiguously their field; track 2 takes a
@@ -253,9 +262,13 @@ storing it in the crontab:
 
 ```
 JS=/full/path/to/jobsweep
-0 10 * * *  cd $JS && { eval "$(grep '^export APIFY_TOKEN=' $HOME/.bashrc)"; .venv/bin/python jobsweep.py; } >> sweep.log 2>&1
-0 16 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+0 10 * * 0-4 cd $JS && { eval "$(grep '^export APIFY_TOKEN=' $HOME/.bashrc)"; .venv/bin/python jobsweep.py; } >> sweep.log 2>&1
+0 10 * * 5,6 cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+0 16 * * *   cd $JS && .venv/bin/python jobsweep.py --source direct --light >> sweep.log 2>&1
 ```
+
+`--light` skips Workday and SmartRecruiters boards (many requests each);
+keep them on one run a day.
 
 Verify with `crontab -l`, and the next morning check `sweep.log` and
 `digests/`. On macOS, if the log shows a permission error, give `cron` Full

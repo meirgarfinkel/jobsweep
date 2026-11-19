@@ -245,5 +245,70 @@ check("'3 days and 4 hours ago'",
       dashboard._ago(now - _td(days=3, hours=4), True) == "3 days and 4 hours ago")
 check("date-only source -> days", dashboard._ago(now - _td(days=2), False) == "2 days ago")
 
+print("\n#B1 boards behind index links")
+import boards
+for url, ats, want in [
+        ("https://jobs.ashbyhq.com/pinecone/499ce77a", "ashby", ("ashby", "pinecone")),
+        ("https://jobs.lever.co/goodleap/65bb56a4", "lever.co", ("lever", "goodleap")),
+        ("https://job-boards.greenhouse.io/discord/jobs/89", "greenhouse", ("greenhouse", "discord")),
+        ("https://jobs.smartrecruiters.com/ServiceNow/7440-x", "smartrecruiters",
+         ("smartrecruiters", "ServiceNow")),
+        ("https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/job/Israel/x_JR1", "workday",
+         ("workday", "https://nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite")),
+        ("https://www.comeet.com/jobs/port/59.004/be/F3.27B", "comeet", ("comeet", "port/59.004")),
+        ("https://careers.example.com/job/123", "in-house", None)]:
+    got = boards.board_of(url, ats, "X")
+    check(f"board_of({ats}) -> {want}", got == want, got)
+
+print("\n#B2 Workday country filter")
+exact = [{"facetParameter": "locationMainGroup", "values": [
+    {"facetParameter": "locationHierarchy1", "values": [
+        {"descriptor": "Israel", "id": "IL1"}, {"descriptor": "India", "id": "IN1"}]}]}]
+check("exact country value wins", js._workday_country_facet(exact, "Israel")
+      == ("locationHierarchy1", ["IL1"]))
+offices = [{"facetParameter": "locations", "values": [
+    {"descriptor": "Office - Israel - Tel Aviv", "id": "a"},
+    {"descriptor": "Office - Israel - Petach Tikva", "id": "b"},
+    {"descriptor": "Office - US - Santa Clara", "id": "c"}]}]
+check("falls back to every office naming the country",
+      js._workday_country_facet(offices, "Israel") == ("locations", ["a", "b"]))
+check("no match -> None", js._workday_country_facet(offices, "Japan") is None)
+
+print("\n#B3 cross-source duplicate key")
+check("company suffixes ignored",
+      store.job_key("Check Point Software Technologies Ltd", "Backend Developer")
+      == store.job_key("Check Point", "backend  developer"))
+check("different titles stay apart",
+      store.job_key("Acme", "Backend Developer") != store.job_key("Acme", "Frontend Developer"))
+
+print("\n#B4 harvest grows the lists")
+with tempfile.TemporaryDirectory() as d:
+    bpath, cpath = pathlib.Path(d) / "boards.tsv", pathlib.Path(d) / "comeet.tsv"
+    cpath.write_text("port\t59.004\n", encoding="utf-8")
+    mk = lambda **k: js.Job(uid="u", title="T", location=k.pop("location", "Tel Aviv, Israel"),
+                            track="israel", **k)
+    jobs = [mk(company="Pinecone", url="https://jobs.ashbyhq.com/pinecone/1", ats="ashby"),
+            mk(company="Pinecone", url="https://jobs.ashbyhq.com/pinecone/2", ats="ashby"),
+            mk(company="Faraway", url="https://jobs.ashbyhq.com/faraway/1", ats="ashby",
+               location="Paris, France"),
+            mk(company="Port", url="https://www.comeet.com/jobs/port/59.004/x/1", ats="comeet"),
+            mk(company="Newco", url="https://www.comeet.com/jobs/newco/AB.001/x/1", ats="comeet")]
+    keep = lambda j: "israel" in j.location.lower()
+    added = boards.harvest(jobs, keep, bpath, cpath)
+    check("adds each new board once, skips other countries and known Comeet",
+          sorted(added) == ["ashby pinecone (Pinecone)", "comeet newco/AB.001 (Newco)"], added)
+    check("boards.tsv holds the new board", boards.load(bpath) == [("ashby", "pinecone", "Pinecone")])
+    check("second harvest adds nothing", boards.harvest(jobs, keep, bpath, cpath) == [])
+
+print("\n#B5 board hides old new cards")
+class _R(dict):
+    def __getitem__(self, k): return dict.get(self, k)
+old = (_dt.now(_tz.utc) - _td(days=6)).isoformat()
+check("6-day-old new card is hidden at 4 days",
+      dashboard._too_old(_R(status="new", posted_at=old), 4))
+check("6-day-old applied card stays",
+      not dashboard._too_old(_R(status="applied", posted_at=old), 4))
+check("no limit hides nothing", not dashboard._too_old(_R(status="new", posted_at=old), None))
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -219,26 +220,91 @@ def _workday_date(posted_on: str | None) -> str:
     return ""
 
 
+def _workday_country_facet(facets: list, country: str):
+    """(facetParameter, [ids]) selecting `country` in a Workday facets tree,
+    or None. Tenants name things differently: some have a country value
+    ("Israel"), others only offices ("Office - Israel - Tel Aviv"). An exact
+    country value wins; otherwise every location value naming the country."""
+    want = country.strip().lower()
+    word = re.compile(rf"(?<!\w){re.escape(want)}(?!\w)")
+    exact, partial = None, {}
+
+    def walk(nodes):
+        nonlocal exact
+        for f in nodes:
+            param = f.get("facetParameter")
+            for v in f.get("values") or []:
+                if "values" in v:       # a facet group, e.g. locationMainGroup
+                    walk([v])
+                    continue
+                d = str(v.get("descriptor", "")).strip().lower()
+                if not param or not v.get("id"):
+                    continue
+                if d == want and exact is None:
+                    exact = (param, [v["id"]])
+                elif word.search(d) and "location" in param.lower():
+                    partial.setdefault(param, []).append(v["id"])
+    walk(facets)
+    if exact:
+        return exact
+    if partial:
+        # The facet with the most matching values is the location list.
+        param = max(partial, key=lambda p: len(partial[p]))
+        return param, partial[param]
+    return None
+
+
 class DirectSource:
     """Free mode: hit each company's own public board endpoint."""
 
-    def __init__(self, cfg: dict):
+    # Boards that take many requests each; --light skips them.
+    HEAVY = ("workday", "smartrecruiters")
+
+    def __init__(self, cfg: dict, light: bool = False):
         self.cfg = cfg
+        self.light = light
         # Workday tenants can hold thousands of reqs; stopping silently at a
         # fixed number makes a partial sweep look complete.
         self.max_per_board = int(cfg.get("max_per_board", 400))
+        # board_locations: keep only jobs whose location names one of these
+        # (whole-word, like locations_ok). Applies to the boards below, not
+        # Comeet, which has comeet_countries. [] keeps everything.
+        self.locs = [str(x) for x in (cfg.get("board_locations") or [])]
+
+    def _boards(self) -> list[tuple[str, str, str]]:
+        """(platform, id, company name) from the config lists and boards_file."""
+        import boards
+        out = [(p, str(x), "") for p in boards.PLATFORMS
+               for x in (self.cfg.get(p) or [])]
+        if self.cfg.get("boards_file"):
+            out += boards.load(self.cfg["boards_file"])
+        seen, uniq = set(), []
+        for p, bid, name in out:
+            if (p, bid.lower()) not in seen:
+                seen.add((p, bid.lower()))
+                uniq.append((p, bid, name))
+        return uniq
 
     def fetch(self) -> list[Job]:
         self.failed: list[str] = []
         jobs: list[Job] = []
-        for slug in (self.cfg.get("greenhouse") or []):
-            jobs += self._guard(self._greenhouse, slug)
-        for slug in (self.cfg.get("lever") or []):
-            jobs += self._guard(self._lever, slug)
-        for slug in (self.cfg.get("ashby") or []):
-            jobs += self._guard(self._ashby, slug)
-        for url in (self.cfg.get("workday") or []):
-            jobs += self._guard(self._workday, url)
+        readers = {"greenhouse": self._greenhouse, "lever": self._lever,
+                   "ashby": self._ashby, "workday": self._workday,
+                   "smartrecruiters": self._smartrecruiters}
+        counts: dict[str, int] = {}
+        for platform, bid, name in self._boards():
+            if self.light and platform in self.HEAVY:
+                continue
+            self._name = name
+            got = self._guard(readers[platform], bid)
+            if self.locs:
+                got = [j for j in got
+                       if any(_has(k, (j.location or "").lower()) for k in self.locs)]
+            counts[platform] = counts.get(platform, 0) + len(got)
+            jobs += got
+        if counts:
+            print("  boards: " + ", ".join(f"{p} {n}" for p, n in counts.items())
+                  + (" (light run: Workday/SmartRecruiters skipped)" if self.light else ""))
         jobs += self._comeet_all()
         return jobs
 
@@ -310,7 +376,7 @@ class DirectSource:
         for j in data.get("jobs", []):
             title = (j.get("title") or "").strip()
             url = j.get("absolute_url") or ""
-            company = j.get("company_name") or slug
+            company = getattr(self, "_name", "") or j.get("company_name") or slug
             out.append(Job(
                 uid=make_uid(company, title, url), title=title, company=company,
                 location=((j.get("location") or {}).get("name") or "—"),
@@ -326,12 +392,13 @@ class DirectSource:
         r = requests.get(u, headers=UA, timeout=TIMEOUT)
         r.raise_for_status()
         out = []
+        company = getattr(self, "_name", "") or slug
         for j in r.json():
             title, url = j.get("text", ""), j.get("hostedUrl", "")
             cats = j.get("categories") or {}
             ts = j.get("createdAt")
             out.append(Job(
-                uid=make_uid(slug, title, url), title=title, company=slug,
+                uid=make_uid(company, title, url), title=title, company=company,
                 location=cats.get("location", "—"), url=url, ats="lever",
                 posted_at=(
                     datetime.fromtimestamp(ts / 1000, timezone.utc).isoformat()
@@ -347,15 +414,66 @@ class DirectSource:
         r.raise_for_status()
         data = r.json()
         out = []
+        company = getattr(self, "_name", "") or slug
         for j in data.get("jobs", []):
             # Ashby titles routinely carry leading whitespace.
             title = (j.get("title") or "").strip()
             url = j.get("jobUrl", "")
+            remote = "Remote" if j.get("isRemote") else ""
             out.append(Job(
-                uid=make_uid(slug, title, url), title=title, company=slug,
+                uid=make_uid(company, title, url), title=title, company=company,
                 location=j.get("location", "—"), url=url, ats="ashby",
                 posted_at=j.get("publishedAt", ""),
                 description=(j.get("descriptionPlain") or "")[:4000],
+                arrangement=remote,
+            ))
+        return out
+
+    def _smartrecruiters(self, company_id: str) -> list[Job]:
+        """Public postings API. The list has no description, so each posting
+        that passes board_locations gets one detail request."""
+        base = f"https://api.smartrecruiters.com/v1/companies/{company_id}/postings"
+        rows, offset = [], 0
+        while offset < self.max_per_board:
+            r = requests.get(base, params={"limit": 100, "offset": offset},
+                             headers=UA, timeout=TIMEOUT)
+            r.raise_for_status()
+            data = r.json()
+            page = data.get("content") or []
+            rows += page
+            offset += len(page)
+            if not page or offset >= int(data.get("totalFound") or 0):
+                break
+        out = []
+        for p in rows:
+            loc = p.get("location") or {}
+            location = loc.get("fullLocation") or ", ".join(
+                x for x in (loc.get("city"), loc.get("country")) if x) or "—"
+            if self.locs and not any(_has(k, location.lower()) for k in self.locs):
+                continue            # skip the detail request for far-away jobs
+            company = (getattr(self, "_name", "")
+                       or (p.get("company") or {}).get("name") or company_id)
+            title = (p.get("name") or "").strip()
+            url = f"https://jobs.smartrecruiters.com/{company_id}/{p.get('id')}"
+            desc = ""
+            try:
+                d = requests.get(p["ref"], headers=UA, timeout=TIMEOUT).json()
+                secs = ((d.get("jobAd") or {}).get("sections") or {})
+                desc = " ".join(re.sub(r"<[^>]+>", " ", (s or {}).get("text") or "")
+                                for s in secs.values())
+                desc = re.sub(r"\s+", " ", desc).strip()[:4000]
+                time.sleep(0.3)
+            except Exception:
+                pass                # keep the posting; scoring just has less
+            arrangement = ("Remote" if loc.get("remote")
+                           else "Hybrid" if loc.get("hybrid") else "On-site")
+            level = ((p.get("experienceLevel") or {}).get("id") or "")
+            out.append(Job(
+                uid=make_uid(company, title, url), title=title, company=company,
+                location=location, url=url, ats="smartrecruiters",
+                posted_at=p.get("releasedDate") or "", description=desc,
+                arrangement=arrangement,
+                experience="0-2" if level in ("entry_level", "internship") else "",
             ))
         return out
 
@@ -374,18 +492,40 @@ class DirectSource:
             prefix += f"{locale}/"
         prefix += site
 
+        headers = {**UA, "Content-Type": "application/json",
+                   "Accept": "application/json"}
+        company = getattr(self, "_name", "") or tenant
+        # workday_country: ask Workday for that country's jobs only, using the
+        # board's own location facet, instead of reading every req worldwide.
+        facets, country = {}, (self.cfg.get("workday_country") or "").strip()
+        def post(body):
+            # Workday answers 429 to quick bursts: pause between pages, and
+            # wait and retry when it asks us to slow down.
+            for attempt in range(4):
+                time.sleep(1.0 if attempt == 0 else 10 * attempt)
+                r = requests.post(api, json=body, headers=headers, timeout=TIMEOUT)
+                if r.status_code != 429:
+                    r.raise_for_status()
+                    return r.json()
+                wait = r.headers.get("Retry-After", "")
+                if wait.isdigit():
+                    time.sleep(min(int(wait), 60))
+            r.raise_for_status()
+
+        if country:
+            first = post({"limit": 1, "offset": 0, "searchText": "",
+                          "appliedFacets": {}})
+            hit = _workday_country_facet(first.get("facets") or [], country)
+            if hit:
+                facets = {hit[0]: hit[1]}
+            else:
+                print(f"  ! workday {tenant}: no '{country}' location filter; "
+                      f"reading all reqs and filtering locally", file=sys.stderr)
+
         out, offset, page, total = [], 0, 20, None
         while offset < self.max_per_board:
-            r = requests.post(
-                api,
-                json={"limit": page, "offset": offset, "searchText": "",
-                      "appliedFacets": {}},
-                headers={**UA, "Content-Type": "application/json",
-                         "Accept": "application/json"},
-                timeout=TIMEOUT,
-            )
-            r.raise_for_status()
-            payload = r.json()
+            payload = post({"limit": page, "offset": offset, "searchText": "",
+                            "appliedFacets": facets})
             if total is None:
                 total = payload.get("total")
             posts = payload.get("jobPostings", [])
@@ -394,9 +534,14 @@ class DirectSource:
             for j in posts:
                 title = (j.get("title") or "").strip()
                 path = j.get("externalPath", "")
+                loc = j.get("locationsText") or "—"
+                # Multi-location reqs read "2 Locations"; name the country we
+                # filtered on so location scoring still sees it.
+                if facets and country.lower() not in loc.lower():
+                    loc = f"{loc}, {country}"
                 out.append(Job(
-                    uid=make_uid(tenant, title, prefix + path), title=title,
-                    company=tenant, location=j.get("locationsText") or "—",
+                    uid=make_uid(company, title, prefix + path), title=title,
+                    company=company, location=loc,
                     url=prefix + path, ats="workday",
                     posted_at=_workday_date(j.get("postedOn")),
                 ))
@@ -425,12 +570,12 @@ class CombinedSource:
         return out
 
 
-def make_source(cfg: dict):
+def make_source(cfg: dict, light: bool = False):
     src = cfg.get("source") or {}
     mode = src.get("mode")
     if isinstance(mode, list):
         # e.g. [indexed, direct]: the paid index plus your own boards.
-        return CombinedSource([make_source({"source": {**src, "mode": m}})
+        return CombinedSource([make_source({"source": {**src, "mode": m}}, light)
                                for m in mode])
     if mode not in ("indexed", "direct"):
         sys.exit(f"source.mode must be 'indexed' or 'direct', got {mode!r}")
@@ -438,7 +583,7 @@ def make_source(cfg: dict):
     if not block:
         sys.exit(f"source.mode is {mode!r} but there is no source.{mode} "
                  f"block in the config.")
-    return IndexedSource(block) if mode == "indexed" else DirectSource(block)
+    return IndexedSource(block) if mode == "indexed" else DirectSource(block, light)
 
 
 # ─────────────────────────────── scoring ───────────────────────────────
@@ -803,6 +948,34 @@ def run_explain(cfg: dict, db: str) -> None:
               "no exclusion is removing an unusual share of postings.")
 
 
+def run_harvest(cfg: dict, jobs: list[Job]) -> None:
+    """Grow boards.tsv (and the Comeet list) from index postings, so the
+    free readers cover those companies from the next run on. Only postings
+    in board_locations count, so the list stays local to your search."""
+    direct = (cfg.get("source") or {}).get("direct") or {}
+    path = direct.get("boards_file")
+    if not path:
+        return
+    import boards
+    locs = [str(x) for x in (direct.get("board_locations") or [])]
+    # Index postings carry the query's track name; free readers leave it
+    # empty or "comeet", and their boards are already known.
+    queries = ((cfg.get("source") or {}).get("indexed") or {}).get("queries") or []
+    tracks = {q.get("name") for q in queries} | {"default"}
+
+    def keep(j):
+        return j.track in tracks and (
+            not locs or any(_has(k, (j.location or "").lower()) for k in locs))
+    try:
+        added = boards.harvest(jobs, keep, path, direct.get("comeet_file"))
+    except Exception as e:      # a failed harvest must not cost the sweep
+        print(f"  ! harvest failed: {e}", file=sys.stderr)
+        return
+    if added:
+        print(f"  harvest: {len(added)} new board(s) for the free readers: "
+              + "; ".join(added[:8]) + (" …" if len(added) > 8 else ""))
+
+
 def run_rescore(s: dict, db: str) -> None:
     """Score stored postings again after the rules change. Only the score and
     reasons columns are written."""
@@ -856,6 +1029,12 @@ def main() -> None:
     ap.add_argument("--serve", action="store_true",
                     help="open the local review board instead of sweeping")
     ap.add_argument("--port", type=int, default=8765, help="port for --serve")
+    ap.add_argument("--light", action="store_true",
+                    help="skip boards that take many requests each "
+                         "(Workday, SmartRecruiters) for a quick extra run")
+    ap.add_argument("--harvest", action="store_true",
+                    help="add the boards behind stored index postings to "
+                         "boards.tsv, then exit")
     ap.add_argument("--source", choices=("indexed", "direct"),
                     help="sweep only this source this run, overriding "
                          "source.mode (e.g. direct = your own boards, free)")
@@ -893,10 +1072,21 @@ def main() -> None:
 
     db = (cfg.get("output") or {}).get("db", "jobsweep.sqlite3")
 
+    if args.harvest:
+        # Seed boards.tsv from every index posting already stored.
+        with store.connect(db) as conn:
+            rows = list(conn.execute("SELECT * FROM jobs"))
+        jobs = [Job(uid=r["uid"], title=r["title"], company=r["company"],
+                    location=r["location"] or "", url=r["url"] or "",
+                    ats=r["ats"] or "", track=r["track"] or "") for r in rows]
+        run_harvest(cfg, jobs)
+        return
+
     if args.serve:
         import dashboard
         dashboard.serve(db, args.port,
-                        threshold=(cfg.get("scoring") or {}).get("threshold"))
+                        threshold=(cfg.get("scoring") or {}).get("threshold"),
+                        max_age_days=(cfg.get("board") or {}).get("max_age_days"))
         return
 
     s = cfg["scoring"]
@@ -913,11 +1103,13 @@ def main() -> None:
         run_rescore(s, db)
         return
 
-    source = make_source(cfg)
+    source = make_source(cfg, light=args.light)
     print(f"Sweeping via {cfg['source']['mode']} source…")
     raw = source.fetch()
     swept_total = len(raw)      # before filtering/dedupe, for the digest header
     print(f"  {swept_total} postings returned")
+    if not args.dry_run:
+        run_harvest(cfg, raw)
 
     # A failed sweep and a quiet day both return zero rows. Without this, an
     # expired token on a schedule reports "0 new" every morning forever.
@@ -965,6 +1157,16 @@ def main() -> None:
 
     with store.connect(db) as conn:
         known = store.known_uids(conn)
+        # The same req can come back under a different link (the index one
+        # day, the company's board the next). Reuse the stored row's uid when
+        # company and title match, so it updates that card instead of
+        # appearing twice.
+        by_key = store.uids_by_key(conn)
+        for j in raw:
+            if j.uid not in known:
+                prior = by_key.get(store.job_key(j.company, j.title))
+                if prior:
+                    j.uid = prior
         fresh = [j for j in raw if j.uid not in known]
         print(f"  {len(fresh)} not seen before")
         if not args.dry_run:

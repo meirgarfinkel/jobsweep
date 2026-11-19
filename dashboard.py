@@ -119,6 +119,9 @@ function ago(ts, hasTime) {{
   return hours ? plural(days, 'day') + ' and ' + plural(hours, 'hour') + ' ago'
                : plural(days, 'day') + ' ago';
 }}
+// Cards still marked "new" disappear once older than this (0 = never), so
+// a tab left open keeps matching what a reload would show.
+const MAX_AGE_MS = {max_age_ms};
 function tick() {{
   const now = Date.now();
   for (const el of document.querySelectorAll('.ago[data-ts]')) {{
@@ -127,6 +130,11 @@ function tick() {{
     const fresh = now - ts < 86400000;
     el.classList.toggle('fresh', fresh);
     el.classList.toggle('stale', !fresh);
+    if (MAX_AGE_MS) {{
+      const card = el.closest('.job');
+      const isNew = card.querySelector('select').value === 'new';
+      card.style.display = (isNew && now - ts > MAX_AGE_MS) ? 'none' : '';
+    }}
   }}
 }}
 tick();
@@ -286,22 +294,40 @@ def _newest_first(rows: list, threshold) -> list:
     return sorted(rows, key=key)
 
 
+def _too_old(r: sqlite3.Row, max_age_days) -> bool:
+    """A card still marked "new" whose posting is older than the limit.
+    Anything you've acted on (shortlist, applied, ...) is never hidden."""
+    if not max_age_days or r["status"] != "new":
+        return False
+    dt, _ = _posted_time(r)
+    if dt is None:
+        return False
+    return (datetime.now(timezone.utc) - dt).total_seconds() > max_age_days * 86400
+
+
 def render(db: str | Path, status: str | None, threshold=None,
-           sort: str = "newest") -> str:
+           sort: str = "newest", max_age_days=None,
+           show_old: bool = False) -> str:
     with store.connect(db) as conn:
         rows = store.all_jobs(conn, status)
         counts = store.counts(conn)
         total = sum(counts.values())
         active = total - counts.get("skipped", 0)
+    hidden = 0
+    if max_age_days and not show_old:
+        kept = [r for r in rows if not _too_old(r, max_age_days)]
+        hidden = len(rows) - len(kept)
+        rows = kept
     if sort != "score":
         rows = _newest_first(rows, threshold)
     sq = "" if sort != "score" else "sort=score"
+    oq = "old=1" if show_old else ""
 
-    def href(st=None, so=None):
+    def href(st=None, so=None, old=None):
         q = [f"status={st}"] if st else []
         so = sq if so is None else so
-        if so:
-            q.append(so)
+        old = oq if old is None else old
+        q += [x for x in (so, old) if x]
         return "/?" + "&".join(q) if q else "/"
     chips = [f'<a class="chip{"" if status else " on"}" href="{href()}">'
              f'all {active}</a>']
@@ -315,14 +341,22 @@ def render(db: str | Path, status: str | None, threshold=None,
                  f'href="{href(status, "")}">newest</a>'
                  f'<a class="chip{" on" if sort == "score" else ""}" '
                  f'href="{href(status, "sort=score")}">best score</a>')
+    if max_age_days:
+        if show_old:
+            chips.append(f'<a class="chip" href="{href(status, None, "")}">'
+                         f'hide new cards older than {max_age_days} days</a>')
+        elif hidden:
+            chips.append(f'<a class="chip" href="{href(status, None, "old=1")}">'
+                         f'{hidden} older than {max_age_days} days hidden · show</a>')
     body = ("".join(_job_html(r) for r in rows) if rows
             else '<div class="empty">Nothing here yet — run a sweep.</div>')
+    max_ms = int(max_age_days * 86400000) if (max_age_days and not show_old) else 0
     return PAGE.format(total=active, swept=f"{len(rows)} shown",
-                       chips="".join(chips), body=body)
+                       chips="".join(chips), body=body, max_age_ms=max_ms)
 
 
 def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
-          threshold=None) -> None:
+          threshold=None, max_age_days=None) -> None:
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # keep the console quiet
             pass
@@ -339,7 +373,9 @@ def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
             if status not in store.STATUSES:
                 status = None
             sort = (q.get("sort") or ["newest"])[0]
-            page = render(db, status, threshold, sort).encode()
+            show_old = (q.get("old") or [""])[0] == "1"
+            page = render(db, status, threshold, sort, max_age_days,
+                          show_old).encode()
             self.send_response(200)
             self.send_header("content-type", "text/html; charset=utf-8")
             self.send_header("content-length", str(len(page)))

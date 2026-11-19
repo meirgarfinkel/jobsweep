@@ -56,6 +56,25 @@ source:
     # CHANGE: countries to keep from Comeet (ISO codes): IL, US, GB, DE, ...
     comeet_countries: [IL, US]
     comeet_delay: 1.0
+    # Boards harvested from paid-index results, read free on every run.
+    boards_file: boards.tsv
+    # CHANGE: places you'd work. Used three ways: which jobs to keep from
+    # harvested boards (they list worldwide), and below as locations_ok and
+    # preferred_locations. A country name is normally a trap in
+    # locations_ok (it matches every city in it), but here "israel" is
+    # intended: anywhere in Israel is fine. Cities catch postings that omit
+    # the country.
+    board_locations: &home
+      [israel, "tel aviv", "tel-aviv", jerusalem, haifa, herzliya,
+       "ramat gan", "petah tikva", "petach tikva", raanana, "ra'anana",
+       netanya, rehovot, "beer sheva", "be'er sheva", yokneam, caesarea,
+       "hod hasharon", "kfar saba", givatayim, "rosh ha'ayin", modiin,
+       "modi'in", "or yehuda", "airport city", "bnei brak", holon,
+       "rishon lezion", "ness ziona"]
+    workday_country: Israel               # CHANGE: your country, in English
+
+board:
+  max_age_days: 4                         # hide untouched cards older than this
 
 scoring:
   # CHANGE: words that make a title yours. Whole-word match; "engineer*"
@@ -75,17 +94,9 @@ scoring:
   max_years_required: 8
   bonus_terms: {label: "", terms: []}     # e.g. {label: "my stack", terms: [Python, AWS]}
 
-  # CHANGE: places you'd accept on-site or hybrid work. A country name is
-  # normally a trap (it matches every city in it), but here "israel" is
-  # intended: anywhere in Israel is fine. List cities too, because some
-  # postings omit the country.
-  locations_ok: &home
-    [israel, "tel aviv", "tel-aviv", jerusalem, haifa, herzliya,
-     "ramat gan", "petah tikva", "petach tikva", raanana, "ra'anana",
-     netanya, rehovot, "beer sheva", "be'er sheva", yokneam, caesarea,
-     "hod hasharon", "kfar saba", givatayim, "rosh ha'ayin", modiin,
-     "modi'in", "or yehuda", "airport city", "bnei brak", holon,
-     "rishon lezion", "ness ziona"]
+  # Places you'd accept on-site or hybrid work: the list under
+  # source.direct.board_locations (edit it there).
+  locations_ok: *home
   # Rank home above remote-abroad: +4 for title matches in these places.
   preferred_locations: *home
   preferred_bonus: 4

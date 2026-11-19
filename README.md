@@ -12,10 +12,12 @@ Posted 2026-10-20. core match: analytics engineer; right level; Remote Solely; 5
 ```
 
 > **About this fork.** It adds a free **Comeet reader** (the careers platform
-> many Israeli companies use) with a ready list of 406 companies, a
-> years-of-experience cap, a "rank this region first" bonus, and a reworked
-> review board (newest first, live "3 hours ago" times, tech stack and
-> years asked on each card). Copy `config.local.example.yaml` to get going;
+> many Israeli companies use) with a ready list of 406 companies; a
+> **growing board list** that turns every company the paid index finds on
+> Greenhouse, Lever, Ashby, Workday or SmartRecruiters into one read for
+> free from then on; a years-of-experience cap; a "rank this region first"
+> bonus; and a reworked review board (newest first, live "3 hours ago"
+> times, tech stack and years asked on each card, old cards hidden). Copy `config.local.example.yaml` to get going;
 > [Tweaking your search](#tweaking-your-search) lists every setting.
 > Upstream: [ybendiks/jobsweep](https://github.com/ybendiks/jobsweep).
 
@@ -143,7 +145,9 @@ python jobsweep.py --explain    # what each of your terms actually matches
 
 ```bash
 python jobsweep.py                   # each morning: sweep + write the digest
-python jobsweep.py --source direct   # Comeet (and other direct boards) only, free
+python jobsweep.py --source direct   # Comeet and your harvested boards only, free
+python jobsweep.py --source direct --light   # same, minus Workday/SmartRecruiters (quick)
+python jobsweep.py --harvest         # add boards behind stored index postings to boards.tsv
 python jobsweep.py --serve           # the review board
 python jobsweep.py --rescore         # re-apply scoring after you edit the config
 python jobsweep.py --evaluate        # optional LLM fit scoring (ANTHROPIC_API_KEY)
@@ -152,18 +156,26 @@ python tests_regression.py           # offline checks
 python tests_e2e.py                  # full lifecycle, needs a token (a few cents)
 ```
 
-**6. Schedule it.** One full sweep a day plus free Comeet-only runs in
-between works well: the paid index is queried for the last 24 hours, so
-running it more often re-buys the same rows, while Comeet costs nothing.
-`crontab -e` on macOS/Linux (times are your machine's local time):
+**6. Schedule it.** One paid sweep on workdays plus free runs in between
+works well. The paid index is queried for the last 24 hours, so running it
+more often re-buys the same rows; its main job is finding companies, which
+the free readers then cover every run. `crontab -e` on macOS/Linux (times
+are your machine's local time; `0-4` is Sunday–Thursday):
 
 ```
 JS=/full/path/to/jobsweep
-0 10 * * *  cd $JS && { eval "$(grep '^export APIFY_TOKEN=' $HOME/.bashrc)"; .venv/bin/python jobsweep.py; } >> sweep.log 2>&1
-0 13 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
-30 16 * * * cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
-0 20 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+0 10 * * 0-4 cd $JS && { eval "$(grep '^export APIFY_TOKEN=' $HOME/.bashrc)"; .venv/bin/python jobsweep.py; } >> sweep.log 2>&1
+0 10 * * 5,6 cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+0 13 * * *   cd $JS && .venv/bin/python jobsweep.py --source direct --light >> sweep.log 2>&1
+30 16 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct --light >> sweep.log 2>&1
+0 20 * * *   cd $JS && .venv/bin/python jobsweep.py --source direct --light >> sweep.log 2>&1
 ```
+
+Days without a paid run leave a gap in what the index sees, but only for
+companies not yet in your board list: those already harvested are read on
+every run, weekends included. A longer `timeRange` ("7d") on the next paid
+run would close the gap, but it re-buys rows you already have and the row
+limit then spreads thin, so it is rarely worth it.
 
 The first line reads the token from your `~/.bashrc` at run time, so it is
 never stored in the crontab; or put `APIFY_TOKEN=...` on a line of its own
@@ -207,6 +219,38 @@ link. No account or token.
   Comeet cards on the board say "updated 3 hours ago" rather than "posted".
   A job edited this morning looks new even if it opened weeks ago.
 
+## The growing board list
+
+The paid index finds jobs anywhere, but only those it first saw in the last
+24 hours, a capped number per run, at about 1¢ each. The free readers see
+every open job on a board, as often as you like, but only on boards they
+know about. This fork joins the two.
+
+After each paid sweep, every posting located in `board_locations` is checked
+for the board behind its link:
+
+| Platform | From a link like | Read free with |
+|---|---|---|
+| Greenhouse | `job-boards.greenhouse.io/discord/…`, or a company site with `?gh_jid=…` (the board name is guessed from the company name and confirmed against Greenhouse) | public board API, descriptions included |
+| Lever | `jobs.lever.co/goodleap/…` | public postings API |
+| Ashby | `jobs.ashbyhq.com/pinecone/…` | public job-board API |
+| Workday | `nvidia.wd5.myworkdayjobs.com/NVIDIAExternalCareerSite/…` | the board's own JSON; `workday_country` asks it for one country only. No descriptions, so the years and stack readers have nothing to read |
+| SmartRecruiters | `jobs.smartrecruiters.com/ServiceNow/…` | public postings API, plus one request per local job for its description |
+| Comeet | `comeet.com/jobs/reflectiz/CA.008/…` | added to `comeet_companies.tsv` |
+
+New boards go into `boards.tsv` and the run prints them (`harvest: 3 new
+board(s) …`). From the next run on, each one is read in full, filtered to
+`board_locations`. Run `python jobsweep.py --harvest` once to seed the list
+from postings you already have. You can also add boards by hand: one line
+per board, `platform<TAB>board<TAB>Company name`.
+
+Workday and SmartRecruiters boards take many requests each (NVIDIA has
+~400 Israeli reqs, 20 per page, with a pause between pages to avoid being
+rate-limited), so `--light` skips them for quick extra runs. When the same
+job arrives from two places (the index one day, the board the next), it
+updates the existing card instead of adding a second one; company names are
+compared without suffixes like "Ltd" or "Software Technologies".
+
 ## Tweaking your search
 
 Everything lives in `config.local.yaml` (start from
@@ -226,6 +270,10 @@ Everything lives in `config.local.yaml` (start from
 | `…limit` | Rows per track per run, about 1¢ each. Minimum 10. |
 | `direct.comeet_countries` | ISO country codes to keep from Comeet; `[]` for all |
 | `direct.comeet_file` | The company list (`comeet_companies.tsv`) |
+| `direct.boards_file` | Harvested boards (`boards.tsv`, gitignored, grows by itself) |
+| `direct.board_locations` | Keep only jobs located here from harvested boards; also limits what gets harvested |
+| `direct.workday_country` | `Israel`: ask Workday boards for that country's jobs only |
+| `board.max_age_days` | Hide untouched cards older than this on the board (e.g. `4`) |
 
 **How it's scored** (`scoring:`). A posting appears in the digest when its
 score reaches `threshold`.
@@ -309,6 +357,10 @@ Node, no build step) at http://127.0.0.1:8765/ listing everything swept.
 - **Status.** Set each role to `new / shortlist / applied / interview /
   offer / rejected / silence / skipped`; it writes straight back to SQLite.
   `skipped` hides a role. A later sweep never clobbers a status you set.
+- **Old cards.** With `board: max_age_days: 4`, cards still marked `new`
+  disappear once their posting is more than 4 days old, also in an open
+  tab. Anything you've shortlisted or applied to stays. A link at the top
+  shows the hidden ones.
 
 The board reads the database on every load, so new postings from a
 scheduled sweep appear on refresh.

@@ -100,6 +100,20 @@ source:
     # takes ~10 minutes at 1.0; please don't go much lower.
     comeet_delay: 1.0
     # comeet_limit: 20              # read only the first N (for testing)
+    #
+    # Boards found in paid-index results (Greenhouse, Lever, Ashby, Workday,
+    # SmartRecruiters) are added to this file after each sweep, so from then
+    # on every open job there is read for free. Gitignored; it grows by
+    # itself. `python jobsweep.py --harvest` seeds it from stored postings.
+    boards_file: boards.tsv
+    # Those boards list jobs worldwide: keep only jobs whose location names
+    # one of these (whole words). Also limits which index postings are
+    # harvested. [] keeps everything.
+    board_locations: []
+    # Ask Workday boards for one country's jobs only (uses the board's own
+    # location filter), e.g. Israel. Unset = read every req, up to
+    # max_per_board.
+    # workday_country: Israel
     # Other boards by slug, same as upstream:
     # greenhouse: [stripe]
     # lever: [netflix]
@@ -156,6 +170,13 @@ scoring:
   # Israel above US remote: preferred_locations: [israel, "tel aviv"]
   # preferred_locations: []
   # preferred_bonus: 2
+
+# The review board (--serve).
+board:
+  # Hide cards still marked "new" whose posting is older than this many
+  # days; shortlisted, applied etc. always stay. A link shows them. Unset or
+  # 0 shows everything.
+  max_age_days: 0
 
 # Your background, for the optional LLM fit scoring (--evaluate). Gitignored:
 # keep your own CV text out of the repo.
