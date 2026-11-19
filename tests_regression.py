@@ -628,7 +628,7 @@ except (OSError, ValueError):
     _man = {}
 check("manifest parses", bool(_man))
 check("manifest v2", _man.get("manifest_version") == 2)
-check("board host permission", "http://127.0.0.1:8765/*" in (_man.get("permissions") or []))
+check("board host permission", "http://127.0.0.1/*" in (_man.get("permissions") or []))
 _cs = [c for c in _man.get("content_scripts") or [] if "content.js" in (c.get("js") or [])]
 check("content.js runs in all frames", bool(_cs) and all(c.get("all_frames") is True for c in _cs))
 _js = sorted(_ext.glob("**/*.js")) if _ext.is_dir() else []
