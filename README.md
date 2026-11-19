@@ -418,11 +418,13 @@ subscription. Run `claude` once in a terminal to log in first. With
 `apply.backend: api` in `config.local.yaml`, it calls the Anthropic API with
 `ANTHROPIC_API_KEY` instead, at roughly 2-4 cents per fill. `JOBSWEEP_MODEL`
 picks the model. `apply.timeout` (default 120 seconds) kills a call that
-hangs. Each fill is one model call, and the CLI runs with no tools.
+hangs. Each fill is one model call. The CLI runs with no tools, none of your
+MCP servers, hooks, plugins, settings or CLAUDE.md files, from an empty temp
+folder, and saves no session transcript.
 
 ### What gets filled
 
-The model follows these rules, and the board checks its answers against them:
+The model is told to follow these rules:
 
 - Facts (name, contact, work authorization, salary) come only from your
   profile.
@@ -433,11 +435,21 @@ The model follows these rules, and the board checks its answers against them:
 - Screening questions are answered only when your background clearly
   supports the answer.
 - Demographic questions use your profile value, else a "decline" or "prefer
-  not to say" option, else stay empty and are flagged.
+  not to say" option, else stay empty and get a note.
 - Required agreements (privacy policy, terms) are ticked. Optional ones
   (newsletter, talent pool) are left unticked.
 - "How did you hear about us" gets your `heard_about_us` value.
-- Everything else stays empty and is listed as needing you.
+- Fields that already hold a value are left alone.
+- Everything else stays empty.
+
+The board then checks the answer. It drops answers for field ids that aren't
+on the form, dropdown and radio answers that aren't one of the offered
+options, and anything for file uploads or custom dropdowns. It never ticks a
+box whose label looks like an opt-in (newsletter, marketing, talent
+community or pool, updates, job alerts, future opportunities, SMS), whatever
+the model says. Every required field left empty, including a required box
+the model left unticked, is outlined in amber and counted in "N fields need
+you". Empty optional fields are not flagged.
 
 ### Privacy
 
@@ -445,18 +457,23 @@ A fill sends Claude the job (title, company, location, description), your
 applicant facts, your background text and the form's field labels and
 options. A fill does not send the CV file; the extension attaches it in your
 browser. `--profile-from-cv` does send it, once, so Claude can read it. `applicant.local.yaml`, `profile.local.md` and your CV stay on your
-machine. The board's `/api/fill` and `/api/cv` endpoints answer only the
-extension and refuse requests from web pages.
+machine. The board answers only requests addressed to `127.0.0.1` or
+`localhost`, and its `/api/fill` and `/api/cv` endpoints refuse requests
+from web pages. They do answer any Firefox extension, not only this one. To
+allow only jobsweep, set `apply.extension_origin` to its origin:
+`moz-extension://` followed by the Internal UUID that `about:debugging`
+shows for it.
 
 ### Limits
 
 - Custom dropdowns (not a native select, such as react-select) are not
-  filled. You pick those yourself.
+  filled. They are outlined in amber, and you pick those yourself.
 - Workday asks you to log in first and shows the form over several pages.
-  Click Fill once on each page.
+  Click Fill (it says "Fill again" after the first time) on each page. If
+  the button doesn't come back on a new step, reload the page.
 - You always submit.
-- Tick boxes on forms built with React may look ticked without the page
-  registering it. Check them.
+- The extension talks to the board on port 8765 only. If you run the board
+  with `--port`, fills won't reach it.
 
 ## Optional LLM fit scoring
 

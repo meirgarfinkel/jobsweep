@@ -6,7 +6,8 @@
   if (window.__jobsweepContent) return;
   window.__jobsweepContent = true;
 
-  const CV_HINT = /resume|résumé|\bcv\b|curriculum|pdf|קורות/i;
+  const CV_HINT = /resume|résumé|\bcv\b|curriculum|קורות/i;
+  const COVER_HINT = /cover|motivation|letter|מכתב/i;
   const SKIP_TYPES = new Set(["hidden", "submit", "button", "reset", "image", "password", "range", "color"]);
   const KEEP_TYPES = new Set(["text", "email", "tel", "url", "number", "date", "checkbox", "radio", "file"]);
   const GREEN = "#1a7f37";
@@ -15,7 +16,7 @@
 
   let uid = null;
   let host = null, root = null, button = null, banner = null;
-  let busy = false, finished = false;
+  let busy = false;
 
   // ---------- uid ----------
 
@@ -33,7 +34,7 @@
     const fromHash = window === window.top ? hashUid() : null;
     try {
       const r = await browser.runtime.sendMessage(
-        fromHash ? { type: "register", uid: fromHash } : { type: "whoami" });
+        fromHash ? { type: "register", uid: fromHash, referrer: document.referrer } : { type: "whoami" });
       return (r && r.uid) || null;
     } catch (e) {
       return null;
@@ -48,12 +49,22 @@
     return cs.visibility !== "hidden" && cs.display !== "none";
   }
 
+  // A text input that drives a custom dropdown (react-select, Ashby and
+  // Lever pickers). Typing into it picks nothing, so it is never filled.
+  function isCombobox(el) {
+    const ac = (el.getAttribute("aria-autocomplete") || "").toLowerCase();
+    return el.getAttribute("role") === "combobox" || (ac !== "" && ac !== "none") ||
+      el.getAttribute("aria-haspopup") === "listbox";
+  }
+
   function kind(el) {
     const tag = el.tagName.toLowerCase();
     if (tag === "textarea") return "textarea";
     if (tag === "select") return "select";
     const t = (el.getAttribute("type") || "text").toLowerCase();
-    if (SKIP_TYPES.has(t)) return null;
+    if (SKIP_TYPES.has(t) || t === "search" || el.getAttribute("role") === "searchbox") return null;
+    if (t === "checkbox" || t === "radio" || t === "file") return t;
+    if (isCombobox(el)) return "combobox";
     return KEEP_TYPES.has(t) ? t : "text";
   }
 
@@ -132,8 +143,22 @@
     return labelsText(radio) || clean(radio.getAttribute("aria-label")) || clean(radio.value);
   }
 
+  // "Name *", "Name ✱" (Lever), "Email * (work)", "Email *:".
+  const REQ_MARK = /[*✱]\s*(\([^)]*\))?\s*:?\s*$/;
+
+  // aria-required on a wrapper (fieldset, radiogroup) a few levels up.
+  function requiredAncestor(el) {
+    let node = el.parentElement;
+    for (let depth = 0; node && depth < 5; depth++, node = node.parentElement) {
+      if (node.getAttribute("aria-required") === "true") return true;
+      if (node.tagName === "FORM" || node.tagName === "BODY") return false;
+    }
+    return false;
+  }
+
   function isRequired(el, label) {
-    return !!el.required || el.getAttribute("aria-required") === "true" || /\*\s*$/.test(label);
+    return !!el.required || el.getAttribute("aria-required") === "true" ||
+      REQ_MARK.test(label || "") || requiredAncestor(el);
   }
 
   // ---------- collect ----------
@@ -192,9 +217,25 @@
       const f = g.field;
       f.label = groupLabel(g.els);
       f.options = g.els.map(optionLabel);
-      f.required = g.els.some((r) => isRequired(r, ""));
+      f.required = g.els.some((r) => isRequired(r, f.label));
       const on = g.els.find((r) => r.checked);
       f.value = on ? optionLabel(on) : "";
+    }
+
+    // Checkboxes that share a name answer one question; put the question
+    // in front of each option so the model knows what it's ticking.
+    const boxes = new Map();
+    for (const f of fields) {
+      if (f.type !== "checkbox") continue;
+      const name = refs.get(f.id).el.name;
+      if (!name) continue;
+      if (!boxes.has(name)) boxes.set(name, []);
+      boxes.get(name).push(f);
+    }
+    for (const fs of boxes.values()) {
+      if (fs.length < 2) continue;
+      const q = groupLabel(fs.map((f) => refs.get(f.id).el));
+      if (q) for (const f of fs) f.label = q + ": " + f.label;
     }
     return { fields, refs };
   }
@@ -216,9 +257,16 @@
     fire(el, ["input", "change"]);
   }
 
+  // A click is what React listens to for boxes and radios; setting .checked
+  // changes the DOM but not React's state. Clicking a box never submits.
   function setChecked(el, on) {
     if (el.checked === on) return;
-    el.checked = on;
+    el.click();
+    if (el.checked === on) return;
+    // A handler cancelled the click: set it directly as a last resort.
+    const desc = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
+    if (desc && desc.set) desc.set.call(el, on);
+    else el.checked = on;
     fire(el, ["input", "change"]);
   }
 
@@ -234,6 +282,13 @@
   }
 
   function visibleTargets(ref) {
+    if (ref.kind === "combobox") {
+      // The search input of a custom dropdown can be a few pixels wide;
+      // outline the control around it.
+      let el = ref.el;
+      for (let i = 0; i < 4 && el.parentElement && el.offsetWidth < 40; i++) el = el.parentElement;
+      return [el];
+    }
     const els = ref.els || [ref.el];
     const out = [];
     for (const el of els) {
@@ -260,7 +315,7 @@
       setChecked(ref.el, v === true || v === "true");
       return true;
     }
-    if (ref.kind === "file") return false;
+    if (ref.kind === "file" || ref.kind === "combobox") return false;
     setValue(ref.el, String(v));
     return true;
   }
@@ -270,9 +325,11 @@
     for (const ref of refs.values()) {
       if (ref.kind === "file" && !(ref.el.files && ref.el.files.length)) empty.push(ref);
     }
-    const hint = (ref) => CV_HINT.test([labelFor(ref.el), ref.el.getAttribute("accept"),
-      ref.el.getAttribute("name"), ref.el.id].join(" "));
-    return empty.find(hint) || empty[0] || null;
+    const words = (ref) => [labelFor(ref.el), ref.el.getAttribute("name"), ref.el.id].join(" ");
+    // Never the cover-letter upload, even if it comes first.
+    const ok = empty.filter((ref) => !COVER_HINT.test(words(ref)));
+    return ok.find((ref) => CV_HINT.test(words(ref))) ||
+      ok.find((ref) => /pdf/i.test(ref.el.getAttribute("accept") || "")) || ok[0] || null;
   }
 
   async function attachCv(ref) {
@@ -319,7 +376,7 @@
   }
 
   function showButton() {
-    if (button || finished) return;
+    if (button) return;
     button = css(document.createElement("button"),
       "all:initial;cursor:pointer;font:600 14px/1 " + FONT + ";color:#fff;background:#1f6feb;" +
       "padding:10px 14px;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.25);");
@@ -333,14 +390,9 @@
     busy = on;
     if (!button) return;
     button.disabled = on;
-    button.textContent = on ? "Filling…" : "Fill with jobsweep";
+    button.textContent = on ? "Filling…" : (filledOnce ? "Fill again" : "Fill with jobsweep");
     button.style.setProperty("opacity", on ? "0.7" : "1");
     button.style.setProperty("cursor", on ? "progress" : "pointer");
-  }
-
-  function removeButton() {
-    if (button) button.remove();
-    button = null;
   }
 
   function showBanner(title, lines, isError) {
@@ -376,8 +428,10 @@
 
   // ---------- fill ----------
 
+  let filledOnce = false;
+
   async function onFill() {
-    if (busy || finished) return;
+    if (busy) return;
     setBusy(true);
     const { fields, refs } = collect();
     let res;
@@ -402,6 +456,15 @@
       if (apply(ref, v)) mark(visibleTargets(ref), GREEN);
       else unanswered.add(id);
     }
+    // Custom dropdowns are left for the person, every one of them.
+    let custom = 0;
+    for (const [id, ref] of refs) {
+      if (ref.kind !== "combobox") continue;
+      unanswered.add(id);
+      custom++;
+    }
+    if (custom) lines.push(custom === 1 ? "Pick the dropdown outlined in amber yourself."
+      : "Pick the " + custom + " dropdowns outlined in amber yourself.");
     const target = cvTarget(refs);
     if (target) {
       const problem = await attachCv(target);
@@ -414,19 +477,26 @@
     }
 
     const left = unanswered.size;
-    finished = true;
+    // The button stays, so a later step of the form can be filled too.
+    filledOnce = true;
     setBusy(false);
-    removeButton();
     showBanner("Filled by jobsweep — review before submitting. " +
       (left === 1 ? "1 field needs you." : left + " fields need you."), lines, false);
   }
 
   // ---------- start ----------
 
+  // A form, not a lone search or newsletter box: two fields, or an upload.
   function hasForm() {
+    let n = 0;
     for (const el of document.querySelectorAll("input, textarea, select")) {
       const k = kind(el);
-      if (k && k !== "file" && visibleField(el, k)) return true;
+      if (!k) continue;
+      if (k === "file") {
+        if (!el.disabled) return true;
+        continue;
+      }
+      if (visibleField(el, k) && ++n >= 2) return true;
     }
     return false;
   }
@@ -437,10 +507,28 @@
   }
 
   async function check() {
-    if (finished || button) return;
+    if (button) return;
     if (!uid) uid = await findUid();
     if (uid && !tooSmall() && hasForm()) showButton();
   }
 
-  check().then(() => setTimeout(check, 3000));
+  // A few bounded looks for a form that renders late; nothing keeps
+  // watching the page after the last one.
+  let looks = [];
+  function lookForForm() {
+    for (const t of looks) clearTimeout(t);
+    looks = [0, 1000, 3000, 8000, 15000].map((ms) => setTimeout(check, ms));
+  }
+
+  // The background says the tab moved to a new URL without a page load
+  // (Workday's and SmartRecruiters' steps): look again.
+  browser.runtime.onMessage.addListener((msg) => {
+    if (!msg || msg.type !== "recheck" || busy) return undefined;
+    filledOnce = false;
+    if (button) setBusy(false);
+    lookForForm();
+    return undefined;
+  });
+
+  lookForForm();
 })();

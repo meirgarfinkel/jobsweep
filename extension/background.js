@@ -1,13 +1,22 @@
 // Keeps tab -> job uid and talks to the jobsweep board on the content
-// scripts' behalf. Fetching from here sends Origin moz-extension://..., which
-// is the only origin the board's /api/fill and /api/cv answer, and keeps the
-// job site's CSP out of the way.
+// scripts' behalf. Fetching from here sends Origin moz-extension://... (or no
+// Origin at all, so every fetch also carries X-Jobsweep-Extension: 1); those
+// are the only requests the board's /api/fill and /api/cv answer. It also
+// keeps the job site's CSP out of the way.
 const BOARD = "http://127.0.0.1:8765";
+const EXT_HEADER = { "x-jobsweep-extension": "1" };
 const DOWN = "jobsweep board isn't running: start it with python jobsweep.py --serve, then click Fill again.";
 
 const tabJob = new Map();
 
 browser.tabs.onRemoved.addListener((tabId) => tabJob.delete(tabId));
+
+// Multi-step forms (Workday, SmartRecruiters) change the URL without a page
+// load, so the content script is told to look for a form again.
+browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!changeInfo.url || !tabJob.has(tabId)) return;
+  browser.tabs.sendMessage(tabId, { type: "recheck" }).catch(() => {});
+});
 
 function okUid(uid) {
   return typeof uid === "string" && uid.length > 0 && uid.length <= 200;
@@ -44,7 +53,7 @@ async function fill(uid, url, fields) {
   try {
     r = await fetch(BOARD + "/api/fill", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...EXT_HEADER },
       body: JSON.stringify({ uid, url, fields }),
     });
   } catch (e) {
@@ -61,13 +70,18 @@ async function fill(uid, url, fields) {
 async function cv() {
   let r;
   try {
-    r = await fetch(BOARD + "/api/cv");
+    r = await fetch(BOARD + "/api/cv", { headers: EXT_HEADER });
   } catch (e) {
     return { error: DOWN };
   }
   if (!r.ok) return { error: await readError(r) };
   const data = await r.arrayBuffer();
-  return { name: r.headers.get("x-filename") || "cv.pdf", data };
+  // The board percent-encodes the name (headers can't carry Hebrew).
+  let name = "cv.pdf";
+  try {
+    name = decodeURIComponent(r.headers.get("x-filename") || "") || "cv.pdf";
+  } catch (e) { /* malformed: keep cv.pdf */ }
+  return { name, data };
 }
 
 browser.runtime.onMessage.addListener((msg, sender) => {
@@ -77,8 +91,11 @@ browser.runtime.onMessage.addListener((msg, sender) => {
     case "open":
       return openJob(msg, sender);
     case "register":
-      // The #jobsweep=<uid> fallback, read by the top frame of the tab.
-      if (tabId !== undefined && sender.frameId === 0 && okUid(msg.uid)) {
+      // The #jobsweep=<uid> fallback, read by the top frame of the tab. Only
+      // a page the board opened counts, so a site can't claim a job by
+      // setting its own hash.
+      if (tabId !== undefined && sender.frameId === 0 && okUid(msg.uid) &&
+          typeof msg.referrer === "string" && msg.referrer.startsWith(BOARD + "/")) {
         tabJob.set(tabId, msg.uid);
       }
       return Promise.resolve({ uid: tabJob.get(tabId) || null });

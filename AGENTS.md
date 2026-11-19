@@ -321,9 +321,10 @@ anywhere else, and never echo it into logs or commits.
 7. Start `python jobsweep.py --serve`, click **Apply for me** on a card and
    check that the Fill button appears on the form.
 
-Tell the user the limits: custom (non-native) dropdowns are not filled,
-Workday needs a login first and one Fill click per page, and they always
-press submit themselves.
+Tell the user the limits: custom (non-native) dropdowns are not filled
+(they are outlined in amber), Workday needs a login first and one Fill click
+per page (the button reads "Fill again" after the first), the extension only
+reaches the board on port 8765, and they always press submit themselves.
 
 ## When something goes wrong
 
