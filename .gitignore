@@ -22,3 +22,6 @@ venv/
 
 # Boards harvested from your own sweeps (grows per user)
 boards.tsv
+
+# Applicant details for Apply for me (name, contact, CV path)
+applicant.local.yaml

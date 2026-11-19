@@ -330,5 +330,32 @@ with tempfile.TemporaryDirectory() as d:
         check("keys_with_description maps only described rows to their text",
               store.keys_with_description(c) == {store.job_key("Acme", "Backend Developer"): "text"})
 
+print("#A1 applicant")
+import applicant
+with tempfile.TemporaryDirectory() as d:
+    d = pathlib.Path(d)
+    (d / "cv.pdf").write_bytes(b"%PDF-1.4")
+    (d / "cv.txt").write_text("x")
+    def _w(name, **over):
+        data = {"name": "Ada Test", "email": "ada@example.com", "cv_path": str(d / "cv.pdf"),
+                "heard_about_us": "Company website"}
+        data.update(over)
+        (d / name).write_text(yaml.safe_dump(data))
+        return d / name
+    def _raises(path):
+        try: applicant.load(path)
+        except applicant.ProfileError: return True
+        return False
+    _p = applicant.load(_w("ok.yaml"))
+    check("valid applicant file loads", _p["name"] == "Ada Test" and _p["phone"] == "")
+    check("absent demographics default to {}", _p["demographics"] == {} and _p["links"] == {})
+    check("missing file raises ProfileError", _raises(d / "nope.yaml"))
+    check("missing email raises ProfileError", _raises(_w("noemail.yaml", email="")))
+    check("cv_path to missing file raises ProfileError", _raises(_w("nocv.yaml", cv_path=str(d / "gone.pdf"))))
+    check("cv_path that is not a pdf raises ProfileError", _raises(_w("txt.yaml", cv_path=str(d / "cv.txt"))))
+    _f = applicant.facts_text(_p)
+    check("facts_text omits cv_path", "cv_path" not in _f)
+    check("facts_text includes heard_about_us value", "Company website" in _f)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

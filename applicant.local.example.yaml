@@ -1,0 +1,21 @@
+# Copy to applicant.local.yaml (gitignored) and fill in. Never commit real data.
+name: CHANGE Your Name
+email: CHANGE you@example.com
+phone: CHANGE +1 555 0100
+city: CHANGE City, Country
+links:
+  linkedin: CHANGE https://www.linkedin.com/in/you
+  github: CHANGE https://github.com/you
+  website: CHANGE https://example.com
+work_authorization: CHANGE e.g. Authorized to work in the EU, no sponsorship needed
+notice_period: CHANGE e.g. 1 month
+salary_expectation: CHANGE e.g. 90,000 EUR gross per year
+heard_about_us: Company website
+# Path to your CV PDF; ~ is expanded, relative paths resolve against the repo dir.
+cv_path: CHANGE ~/Documents/cv.pdf
+# Optional. Leave out to have the form's "decline / prefer not to say" chosen.
+# demographics:
+#   gender: CHANGE
+#   race_ethnicity: CHANGE
+#   veteran: CHANGE
+#   disability: CHANGE
