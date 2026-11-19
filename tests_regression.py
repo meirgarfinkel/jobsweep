@@ -156,5 +156,94 @@ check('"*" alone matches nothing', not js._has("*","anything at all"))
 check('"intern" still does not match "international"', not js._has("intern","director, international seo"))
 check('"intern" still matches "intern"', js._has("intern","marketing intern"))
 
+print("\n#C1 years-of-experience reader")
+import extract, comeet, dashboard
+from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+for text, want in [("5+ years of experience in Python", 5),
+                   ("at least 7 years of professional experience", 7),
+                   ("7-10 years of backend experience", 7),
+                   ("Experience: 8+ years building services", 8),
+                   ("more than 5 years of experience", 6),
+                   ("ניסיון של 4 שנים לפחות", 4),
+                   ("5+ שנות ניסיון בפיתוח", 5),
+                   ("our founders bring 20 years of experience", None),
+                   ("no number here", None)]:
+    got = extract.years_required(text)
+    check(f"years_required({text[:34]!r}) == {want}", got == want, f"got {got}")
+
+print("\n#C2 tech stack reader")
+st = extract.tech_stack("We use Python, Go and React with AWS and k8s. You will react fast.")
+check("finds Python, Go, React, AWS, Kubernetes in order",
+      st == ["Python", "Go", "React", "AWS", "Kubernetes"], st)
+check('"go" and "react" as plain verbs are not tech',
+      extract.tech_stack("we go fast and react to feedback") == [])
+check('"Java" does not fire on "JavaScript"',
+      extract.tech_stack("Strong JavaScript skills") == ["JavaScript"])
+
+print("\n#C3 Comeet page parsing")
+_page = ('<script>COMPANY_DATA = {"name": "Acme", "company_uid": "AA.001"};'
+         'COMPANY_POSITIONS_DATA = [{"name": " Backend Engineer ", "uid": "B1.001",'
+         ' "location": {"name": "Tel Aviv - Israel", "country": "IL", "is_remote": false},'
+         ' "workplace_type": "Hybrid", "experience_level": "Entry-level",'
+         ' "time_updated": "2026-11-18T06:22:38Z",'
+         ' "url_comeet_hosted_page": "https://www.comeet.com/jobs/acme/AA.001/be/B1.001",'
+         ' "custom_fields": {"details": [{"name": "Description", "value": "<p>3+ years of experience</p>"}]}},'
+         ' {"name": "Internal only", "uid": "B1.002", "is_internal": true}];</script>')
+rows = comeet.parse_page(_page, "acme")
+check("one public position parsed (internal one skipped)", len(rows) == 1, rows)
+if rows:
+    r0 = rows[0]
+    check("title stripped, company from COMPANY_DATA",
+          r0["title"] == "Backend Engineer" and r0["company"] == "Acme")
+    check("country, arrangement, experience band mapped",
+          (r0["country"], r0["arrangement"], r0["experience"]) == ("IL", "Hybrid", "0-2"), r0)
+    check("description has tags removed", r0["description"] == "3+ years of experience", r0["description"])
+try:
+    comeet.parse_page("<html>generic shell</html>", "gone"); inactive = False
+except comeet.Inactive:
+    inactive = True
+check("a page with no company data reads as Inactive, not an error", inactive)
+
+print("\n#C4 scoring knobs")
+K = {**S, "title_strong_core": ["backend"], "title_weak": [], "seniority": [],
+     "exclude": [], "locations_ok": ["israel"], "threshold": 5}
+def ks(title, extra=None, **kw):
+    j = js.Job(uid="x", title=title, company="C", location=kw.pop("location", "Tel Aviv, Israel"),
+               url="", ats="t", **kw)
+    js.reset_exclusions(); js.score_job(j, {**K, **(extra or {})}); return j
+check("max_years_required drops a role asking for more",
+      ks("Backend Engineer", {"max_years_required": 6},
+         description="8+ years of experience").score == -99)
+check("max_years_required keeps a role asking for exactly the cap",
+      ks("Backend Engineer", {"max_years_required": 6},
+         description="6+ years of experience").score > 0)
+check("junior_penalty 0 leaves 0-2 yr roles unpenalised",
+      ks("Backend Engineer", {"junior_penalty": 0}, experience="0-2").score
+      == ks("Backend Engineer", {"junior_penalty": 0}).score)
+check("junior_penalty defaults to 3",
+      ks("Backend Engineer", experience="0-2").score == ks("Backend Engineer").score - 3)
+pref = {"preferred_locations": ["israel"], "preferred_bonus": 4}
+check("preferred bonus applies to a title match at home",
+      ks("Backend Engineer", pref).score == ks("Backend Engineer").score + 4)
+check("preferred bonus does NOT lift an unrelated title",
+      ks("Office Manager", pref).score == ks("Office Manager").score)
+
+print("\n#C5 example local config and source modes")
+os.environ.setdefault("APIFY_TOKEN", "dummy-for-tests")
+ex = js.deep_merge(yaml.safe_load(open(HERE / "config.yaml")),
+                   yaml.safe_load(open(HERE / "config.local.example.yaml")))
+src = js.make_source(ex)
+check("config.local.example.yaml builds a combined indexed + direct source",
+      type(src).__name__ == "CombinedSource" and len(src.sources) == 2)
+check("comeet_companies.tsv ships with the repo and loads",
+      len(comeet.load_companies(HERE / "comeet_companies.tsv")) > 100)
+
+print("\n#C6 board time labels")
+now = _dt.now(_tz.utc)
+check("'2 hours ago'", dashboard._ago(now - _td(hours=2), True) == "2 hours ago")
+check("'3 days and 4 hours ago'",
+      dashboard._ago(now - _td(days=3, hours=4), True) == "3 days and 4 hours ago")
+check("date-only source -> days", dashboard._ago(now - _td(days=2), False) == "2 days ago")
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

@@ -1,0 +1,99 @@
+# Template for your own search. Copy it, then edit the lines marked CHANGE:
+#
+#   cp config.local.example.yaml config.local.yaml
+#
+# config.local.yaml is gitignored and merges over config.yaml, so your real
+# search never ends up in a commit. Lists you set here REPLACE the ones in
+# config.yaml; they are not added to them.
+#
+# This example: software roles anywhere in Israel (paid index + Comeet),
+# plus remote roles in the United States, Israel ranked first.
+
+source:
+  # Both sources in one sweep. No Apify token? Use  mode: direct  and the
+  # sweep reads only Comeet, for free.
+  mode: [indexed, direct]
+
+  indexed:
+    queries:
+      - name: israel                      # CHANGE: any label you like
+        input:
+          timeRange: "24h"
+          limit: 25                       # ~1¢ per row; minimum is 10
+          descriptionType: "text"
+          removeAgency: true
+          # CHANGE: the titles you want, with spelling variants.
+          # Phrases match as words: "backend engineer" also finds
+          # "Senior Backend Engineer". Use "Python:*" for a prefix.
+          titleSearch:
+            ["software engineer", "software developer",
+             "backend engineer", "backend developer",
+             "full stack engineer", "full-stack engineer", "fullstack engineer"]
+          # CHANGE: titles to skip before you pay for them.
+          titleExclusionSearch: [intern, internship]
+          # CHANGE: country, or "City, Region, Country" (English names).
+          locationSearch: ["Israel"]
+
+      # A second track, e.g. remote roles in another country. Delete this
+      # block if you only want one country.
+      - name: us-remote                   # CHANGE
+        input:
+          timeRange: "24h"
+          limit: 10
+          descriptionType: "text"
+          removeAgency: true
+          titleSearch:                    # CHANGE: usually the same titles
+            ["software engineer", "software developer",
+             "backend engineer", "backend developer",
+             "full stack engineer", "full-stack engineer", "fullstack engineer"]
+          titleExclusionSearch: [intern, internship]
+          locationSearch: ["United States"]          # CHANGE
+          # Remote only. Other values: "On-site", "Hybrid".
+          aiWorkArrangementFilter: ["Remote OK", "Remote Solely"]
+
+  direct:
+    comeet_file: comeet_companies.tsv
+    # CHANGE: countries to keep from Comeet (ISO codes): IL, US, GB, DE, ...
+    comeet_countries: [IL, US]
+    comeet_delay: 1.0
+
+scoring:
+  # CHANGE: words that make a title yours. Whole-word match; "engineer*"
+  # for a prefix. A match scores +3.
+  title_strong_core:
+    ["software engineer", "software developer", backend, "back end",
+     "back-end", fullstack, "full stack", "full-stack"]
+  title_strong_conditional: []
+  domain_exclusions: []                   # CHANGE: e.g. [gambling, defense]
+  title_weak: [engineer, developer]       # +1 alongside a core match
+  # Seniority words that earn +1. [] treats all levels the same.
+  seniority: []
+  junior_penalty: 0                       # 0 = junior roles are welcome
+  # CHANGE: title words that drop a posting entirely (no "*" here).
+  exclude: [intern, internship]
+  # CHANGE or delete: drop roles asking for more years than this.
+  max_years_required: 8
+  bonus_terms: {label: "", terms: []}     # e.g. {label: "my stack", terms: [Python, AWS]}
+
+  # CHANGE: places you'd accept on-site or hybrid work. A country name is
+  # normally a trap (it matches every city in it), but here "israel" is
+  # intended: anywhere in Israel is fine. List cities too, because some
+  # postings omit the country.
+  locations_ok: &home
+    [israel, "tel aviv", "tel-aviv", jerusalem, haifa, herzliya,
+     "ramat gan", "petah tikva", "petach tikva", raanana, "ra'anana",
+     netanya, rehovot, "beer sheva", "be'er sheva", yokneam, caesarea,
+     "hod hasharon", "kfar saba", givatayim, "rosh ha'ayin", modiin,
+     "modi'in", "or yehuda", "airport city", "bnei brak", holon,
+     "rishon lezion", "ness ziona"]
+  # Rank home above remote-abroad: +4 for title matches in these places.
+  preferred_locations: *home
+  preferred_bonus: 4
+  # On-site/hybrid roles outside locations_ok lose 2 points. Leave these
+  # empty/huge so a far-away on-site role is never waived through.
+  waive_location_titles: []
+  waive_location_salary: 1000000000
+
+  # core title (3) + "engineer" (1) + home (1) = 5 clears; a title match in
+  # a remote role scores 6; an on-site role abroad stays below 5.
+  threshold: 5

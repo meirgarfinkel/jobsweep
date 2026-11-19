@@ -27,7 +27,9 @@ you to "set this up for me."
 
 ## Step 1 — Install
 
-Python 3.9 or newer, two packages.
+Python 3.9 or newer, two packages. Prefer a virtual environment
+(`python3 -m venv .venv`, then `.venv/bin/pip install -r requirements.txt`);
+many Linux systems refuse a plain `pip install`.
 
 ```
 python --version
@@ -57,6 +59,11 @@ Ask the user to paste the token into the command themselves. Do not ask them
 to paste it into the chat.
 
 ## Step 3 — Dry run with the example search
+
+*No token, or only after Israeli companies?* The Comeet reader needs none:
+`python jobsweep.py --source direct --dry-run` reads all ~400 Comeet
+companies in about 10 minutes, free. A user can start there and add the
+token later.
 
 `config.yaml` ships a working data-engineering search so the first run
 returns real postings. `--dry-run` fetches and scores but writes nothing.
@@ -103,10 +110,37 @@ replaces the whole example search.
   is vague — rare, specific terms, not ones every posting in the industry uses.
 - Whether they want remote only, or on-site/hybrid within commuting distance
   of specific cities (and which cities).
-- Seniority: are junior roles unwelcome?
+- Seniority: are junior roles unwelcome? Is there a maximum years of
+  experience they'd consider (becomes `max_years_required`)?
 - Industries they would never work in (these become `domain_exclusions`).
+- Whether they are looking in Israel, or at Israeli companies. If so, turn on
+  the Comeet reader (below), and ask which countries' Comeet jobs to keep.
+- If they want two regions (e.g. home on-site plus remote abroad), which one
+  should rank first (becomes `preferred_locations`).
 
-**Then write the file.** Model it on `config.yaml`, which has two tracks:
+**This fork: start from the template.** `config.local.example.yaml` is a
+complete, commented search (Israel via the paid index and Comeet, plus a
+remote-abroad track). Copy it to `config.local.yaml` and edit the lines
+marked `CHANGE` with the interview answers; README's *Tweaking your search*
+has a table of every setting. Settings this fork adds:
+
+- `source.mode: [indexed, direct]` runs both sources in one sweep;
+  `mode: direct` alone needs no Apify token.
+- `source.direct.comeet_file` / `comeet_countries` (ISO codes, `[]` = all):
+  the Comeet reader. `comeet_companies.tsv` ships with 406 companies;
+  `python comeet_discover.py` refreshes it (10–15 min, network).
+- `scoring.max_years_required`: drops postings whose description asks for
+  more years. `scoring.junior_penalty`: points off 0–2 yr roles (default 3;
+  0 if junior roles are welcome; also set `seniority: []`).
+- `scoring.preferred_locations` + `preferred_bonus`: ranks one region above
+  the rest, for title matches only. Pick the bonus so the lowest home score
+  beats the highest abroad score (the template's comments show the sums).
+- Here `locations_ok` may contain `israel` on purpose when anywhere in the
+  country is acceptable; the rule below is about commuting.
+- After any scoring change, `python jobsweep.py --rescore` re-scores what is
+  already stored, so the board reflects it without a new sweep.
+
+**Upstream's approach,** if not using the template: model the file on `config.yaml`, which has two tracks:
 track 1 matches titles that are unambiguously their field; track 2 takes a
 broad title list and ANDs it with specific description terms. Copy the
 structure, replace the terms. Keep `limit` at 25 per track until the filters
@@ -171,10 +205,13 @@ python jobsweep.py --serve
 ```
 
 Opens http://127.0.0.1:8765/ in their browser (prints the URL if it cannot).
-Each posting is a card with a status dropdown — new, shortlist, applied,
-interview, offer, rejected, silence, skipped — and a notes field. Changes
+Postings that cleared the threshold come first, newest at the top, with live
+"3 hours ago" times (green under 24 h). Each card has a status dropdown —
+new, shortlist, applied, interview, offer, rejected, silence, skipped — plus
+the years of experience and tech stack read from the description. Changes
 save to the database immediately. Ctrl-C stops it. Use `--port` if 8765 is
-taken.
+taken. Comeet cards say "updated", because Comeet only exposes the last-edit
+time.
 
 ## Step 7 — Schedule the daily sweep
 
@@ -204,6 +241,20 @@ Add, with the real path and token:
 ```
 APIFY_TOKEN=apify_api_...
 30 7 * * * cd /full/path/to/jobsweep && python3 jobsweep.py >> sweep.log 2>&1
+```
+
+With Comeet on, suggest one full sweep a day plus free Comeet-only runs
+(`--source direct`) a few times later in the day. The paid index is queried
+for the last 24 hours, so running it more than daily re-buys the same rows.
+Ask the user for the times they want. Don't schedule Comeet more often than
+every couple of hours: each run opens all ~400 company pages. If the token
+is in `~/.bashrc`, the full-sweep line can read it at run time instead of
+storing it in the crontab:
+
+```
+JS=/full/path/to/jobsweep
+0 10 * * *  cd $JS && { eval "$(grep '^export APIFY_TOKEN=' $HOME/.bashrc)"; .venv/bin/python jobsweep.py; } >> sweep.log 2>&1
+0 16 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
 ```
 
 Verify with `crontab -l`, and the next morning check `sweep.log` and

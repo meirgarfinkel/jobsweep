@@ -35,7 +35,10 @@
 #     and flags terms that match nothing or that drop an unusual share.
 
 source:
-  mode: indexed          # "indexed" (nationwide) | "direct" (own slug list)
+  # "indexed" (paid index) | "direct" (your own boards, incl. Comeet, free)
+  # | a list to run both in one sweep: [indexed, direct]
+  # A single run can override this with --source indexed / --source direct.
+  mode: indexed
   indexed:
     actor: "fantastic-jobs~career-site-job-listing-api"
     token_env: APIFY_TOKEN
@@ -85,6 +88,24 @@ source:
             [intern, junior, "entry level", "account executive"]
           locationSearch: ["United States"]
 
+  # ── Direct mode: company boards you read yourself, free. ───────────────
+  # Used when mode is "direct" or a list containing it. Comeet is common
+  # among Israeli companies and is read from comeet_companies.tsv (406
+  # companies; rebuild or extend it with `python comeet_discover.py`).
+  direct:
+    comeet_file: comeet_companies.tsv
+    # Keep only jobs in these countries (ISO codes). [] keeps everything.
+    comeet_countries: [IL]
+    # Pause between company pages, in seconds. A full pass of the list
+    # takes ~10 minutes at 1.0; please don't go much lower.
+    comeet_delay: 1.0
+    # comeet_limit: 20              # read only the first N (for testing)
+    # Other boards by slug, same as upstream:
+    # greenhouse: [stripe]
+    # lever: [netflix]
+    # ashby: [ramp]
+    # workday: ["https://acme.wd5.myworkdayjobs.com/en-US/External"]
+
 scoring:
   # Terms that stand on their own — unambiguously your field.
   title_strong_core: ["data engineer", "analytics engineer", "data platform",
@@ -122,6 +143,19 @@ scoring:
   waive_location_salary: 150000
 
   threshold: 5
+
+  # ── Optional knobs (off unless set) ──
+  # Drop roles whose description asks for more years than this. Reads
+  # "7+ years of experience", "at least 7 years", "5+ שנות ניסיון".
+  # Postings that state no number are kept.
+  # max_years_required: 6
+  # Points taken off postings the index tags 0-2 years. 0 keeps junior
+  # roles level with the rest.
+  # junior_penalty: 3
+  # Rank one region above the others (only for title matches), e.g. to put
+  # Israel above US remote: preferred_locations: [israel, "tel aviv"]
+  # preferred_locations: []
+  # preferred_bonus: 2
 
 # Your background, for the optional LLM fit scoring (--evaluate). Gitignored:
 # keep your own CV text out of the repo.

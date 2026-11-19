@@ -11,6 +11,14 @@ Acme Corp · Remote - United States · greenhouse · score 8 · 150,000–185,00
 Posted 2026-10-20. core match: analytics engineer; right level; Remote Solely; 5-10 yrs
 ```
 
+> **About this fork.** It adds a free **Comeet reader** (the careers platform
+> many Israeli companies use) with a ready list of 406 companies, a
+> years-of-experience cap, a "rank this region first" bonus, and a reworked
+> review board (newest first, live "3 hours ago" times, tech stack and
+> years asked on each card). Copy `config.local.example.yaml` to get going;
+> [Tweaking your search](#tweaking-your-search) lists every setting.
+> Upstream: [ybendiks/jobsweep](https://github.com/ybendiks/jobsweep).
+
 ## Two things make this different
 
 ### 1. No company list to maintain
@@ -74,11 +82,17 @@ own search config, an audit of those terms, and a scheduled morning sweep.
 
 **The manual version** is below.
 
-**1. Install.** Python 3.9+, two dependencies.
+**1. Install.** Python 3.9+, two dependencies. A virtual environment keeps
+them out of your system Python (the schedule example below assumes `.venv`):
 
 ```bash
-pip install -r requirements.txt
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt      # Windows: .venv\Scripts\pip
 ```
+
+Then run the commands below with `.venv/bin/python` (Windows:
+`.venv\Scripts\python`), or activate the environment first with
+`source .venv/bin/activate` and use plain `python`.
 
 **2. Get an API token.** The sweep runs through a hosted index of company
 career sites. Create a free account at [apify.com](https://apify.com), then
@@ -98,11 +112,24 @@ see the shape of the thing. `--dry-run` fetches and scores but writes nothing.
 python jobsweep.py --dry-run
 ```
 
-**4. Make it yours.** Edit the `titleSearch` terms and the scoring lists in
-`config.yaml` for your own field — or, better, copy them into
-**`config.local.yaml`**, which merges over `config.yaml` and is gitignored.
-Overriding `queries` there swaps the whole search at once, so the committed
-config stays shareable and your real search stays private.
+*No token yet, or only after Comeet companies?* This needs nothing but the
+install, and is free:
+
+```bash
+python jobsweep.py --source direct --dry-run    # reads all 406 Comeet companies (~10 min)
+```
+
+**4. Make it yours.** Copy the template and edit the lines marked `CHANGE`:
+your titles, the countries and cities you'd work in, what to exclude.
+
+```bash
+cp config.local.example.yaml config.local.yaml
+```
+
+**`config.local.yaml`** merges over `config.yaml` and is gitignored, so the
+committed config stays shareable and your real search stays private. Lists
+you set there replace the ones in `config.yaml`. Every setting is described in
+[Tweaking your search](#tweaking-your-search).
 
 Then audit what you wrote (see
 [Editing the term lists safely](#editing-the-term-lists-safely)):
@@ -115,18 +142,121 @@ python jobsweep.py --explain    # what each of your terms actually matches
 **5. Use it.**
 
 ```bash
-python jobsweep.py              # each morning: sweep + write the digest
-python jobsweep.py --serve      # the review board
-python jobsweep.py --evaluate   # optional LLM fit scoring (ANTHROPIC_API_KEY)
-python tests_regression.py      # offline checks
-python tests_e2e.py             # full lifecycle, needs a token (a few cents)
+python jobsweep.py                   # each morning: sweep + write the digest
+python jobsweep.py --source direct   # Comeet (and other direct boards) only, free
+python jobsweep.py --serve           # the review board
+python jobsweep.py --rescore         # re-apply scoring after you edit the config
+python jobsweep.py --evaluate        # optional LLM fit scoring (ANTHROPIC_API_KEY)
+python comeet_discover.py            # refresh the Comeet company list
+python tests_regression.py           # offline checks
+python tests_e2e.py                  # full lifecycle, needs a token (a few cents)
 ```
+
+**6. Schedule it.** One full sweep a day plus free Comeet-only runs in
+between works well: the paid index is queried for the last 24 hours, so
+running it more often re-buys the same rows, while Comeet costs nothing.
+`crontab -e` on macOS/Linux (times are your machine's local time):
+
+```
+JS=/full/path/to/jobsweep
+0 10 * * *  cd $JS && { eval "$(grep '^export APIFY_TOKEN=' $HOME/.bashrc)"; .venv/bin/python jobsweep.py; } >> sweep.log 2>&1
+0 13 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+30 16 * * * cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+0 20 * * *  cd $JS && .venv/bin/python jobsweep.py --source direct >> sweep.log 2>&1
+```
+
+The first line reads the token from your `~/.bashrc` at run time, so it is
+never stored in the crontab; or put `APIFY_TOKEN=...` on a line of its own
+above the jobs. Adjust the paths if you didn't install into `.venv`. Cron
+skips runs while the computer is asleep. Windows: see step 7 of
+[`AGENTS.md`](AGENTS.md).
 
 `tests_regression.py` covers scoring, matching, storage and config handling
 with no network. `tests_e2e.py` clones the repo into a temp directory, runs
 two real sweeps, and checks that the digest, the database and the review board
 agree with each other — then that a second run is idempotent and leaves your
 application statuses untouched.
+
+## Comeet
+
+Comeet (now Spark Hire Recruit) is the careers platform behind many Israeli
+companies' job pages. The paid index returns some Comeet postings, but only
+those it first saw in the last 24 hours, up to your row limit. Each
+company's public page, `www.comeet.com/jobs/<company>/<id>`, carries its open
+jobs as structured data, which `comeet.py` reads directly: title, location
+and country, on-site/hybrid/remote, experience level, full description and a
+link. No account or token.
+
+- **Which companies.** `comeet_companies.tsv` lists 406 companies that had a
+  live Comeet page in November 2026, with their job counts then. Comeet has
+  no public directory, so the list was built from
+  [Common Crawl](https://commoncrawl.org)'s public URL index plus web
+  searches.
+- **Refreshing it.** `python comeet_discover.py` re-reads the most recent
+  Common Crawl archives, merges in any new companies, opens each page once,
+  and drops companies that have left Comeet. It takes 10–15 minutes. To add
+  companies you found yourself, put their Comeet URLs in a text file, one
+  per line, and pass `--extra urls.txt`.
+- **Countries.** `comeet_countries: [IL]` keeps Israeli jobs only. Add `US`,
+  `GB` and so on to keep those too; `[]` keeps everything.
+- **Politeness.** A sweep opens every company page once, one per second, so
+  a full pass takes about 10 minutes. Running it a few times a day is fine.
+  Please don't lower `comeet_delay` or run it every few minutes: that much
+  traffic is how an IP address gets blocked.
+- **Times.** Comeet only publishes when a posting was last *edited*, so
+  Comeet cards on the board say "updated 3 hours ago" rather than "posted".
+  A job edited this morning looks new even if it opened weeks ago.
+
+## Tweaking your search
+
+Everything lives in `config.local.yaml` (start from
+`config.local.example.yaml`). After editing scoring settings, run
+`python jobsweep.py --rescore` to re-score what's already stored, then
+`--explain` to audit the terms.
+
+**What gets fetched** (`source:`)
+
+| Setting | What it does |
+|---|---|
+| `mode` | `indexed` (paid index), `direct` (Comeet and other boards, free), or `[indexed, direct]` for both |
+| `indexed.queries[].input.titleSearch` | Titles to fetch. Word match: `"backend engineer"` finds "Senior Backend Engineer". `"Python:*"` for a prefix. |
+| `…titleExclusionSearch` | Titles never fetched, so never paid for. Can't be audited, so keep it to sure things. |
+| `…locationSearch` | `["Israel"]`, `["United States"]`, or `"City, Region, Country"` in English |
+| `…aiWorkArrangementFilter` | `["Remote OK", "Remote Solely"]` for remote only; also `"On-site"`, `"Hybrid"` |
+| `…limit` | Rows per track per run, about 1¢ each. Minimum 10. |
+| `direct.comeet_countries` | ISO country codes to keep from Comeet; `[]` for all |
+| `direct.comeet_file` | The company list (`comeet_companies.tsv`) |
+
+**How it's scored** (`scoring:`). A posting appears in the digest when its
+score reaches `threshold`.
+
+| Setting | Points | Notes |
+|---|---|---|
+| `title_strong_core` | +3 | Words that make a title yours. Whole-word match; `engineer*` for a prefix. |
+| `title_weak` | +1 | Generic words like `engineer`, `developer` |
+| `seniority` | +1 | Leave `[]` if you don't want senior titles ranked up |
+| Remote work | +2 | From the index's or Comeet's own classification |
+| `locations_ok` | +1 | On-site/hybrid in a place you'd go to; elsewhere it's −2 |
+| `preferred_locations` | `+preferred_bonus` | Ranks one region first; only applies to title matches |
+| 5–10 / 10+ years band | +1 | As tagged by the index |
+| 0–2 years band | −`junior_penalty` | Default 3; set `0` to keep junior roles level |
+| `exclude` | drops it | Title words that rule a posting out (no `*`) |
+| `max_years_required` | drops it | When the description asks for more years than this |
+| `bonus_terms` | +1 | When the description mentions something you're strong in |
+
+**Examples**
+
+- *Remote anywhere, no on-site:* leave `locations_ok: []`, drop the
+  `locationSearch` line or set `aiWorkArrangementFilter` on every track, and
+  set `comeet_countries: []`.
+- *Tel Aviv area only, no remote abroad:* delete the second track, set
+  `comeet_countries: [IL]`, and list only nearby cities in `locations_ok`
+  (not `israel`).
+- *Mid-level and up:* `seniority: [senior, lead]`, `junior_penalty: 3`, and
+  add `junior` to `exclude`.
+- *Skip an industry:* add its words to `domain_exclusions`, and move any
+  ambiguous title words to `title_strong_conditional` so they only count
+  when no excluded domain is mentioned.
 
 ## Editing the term lists safely
 
@@ -167,11 +297,21 @@ title_strong_core  (scores +3 on its own)
 ## The review board
 
 `python jobsweep.py --serve` runs a local page (standard library only — no
-Node, no build step) listing everything swept, highest fit score first (then
-keyword score). Set each role
-to `new / shortlist / applied / interview / offer / rejected / silence /
-skipped`, add notes, and it writes straight back to SQLite. A later sweep
-never clobbers a status you set.
+Node, no build step) at http://127.0.0.1:8765/ listing everything swept.
+
+- **Order.** Roles that reached your threshold come first, newest at the
+  top; the rest follow. A link switches to best-score order.
+- **Times.** "2 hours ago", "3 days and 4 hours ago", kept current while the
+  tab is open. Green under 24 hours, yellow after.
+- **Each card** shows the company, location, source, score and the reasons
+  for it, the years of experience the description asks for, and the tech
+  stack it names (Python, AWS, Kubernetes and ~60 others).
+- **Status.** Set each role to `new / shortlist / applied / interview /
+  offer / rejected / silence / skipped`; it writes straight back to SQLite.
+  `skipped` hides a role. A later sweep never clobbers a status you set.
+
+The board reads the database on every load, so new postings from a
+scheduled sweep appear on refresh.
 
 ## Optional LLM fit scoring
 
@@ -240,9 +380,9 @@ Things that cost real API credits to learn:
 ## Cost
 
 Pay-per-row against an ATS index, roughly $0.01 per posting returned. With
-tight filters a two-track daily sweep lands near **$4–6/month**. `--evaluate`
-is billed separately by Anthropic and only runs on postings that already
-cleared the keyword bar.
+tight filters a two-track daily sweep lands near **$4–6/month**. Comeet and
+the other direct boards are free. `--evaluate` is billed separately by
+Anthropic and only runs on postings that already cleared the keyword bar.
 
 ## Privacy
 
@@ -251,6 +391,8 @@ cleared the keyword bar.
 and your application history. API keys are read from the environment; the tool
 never writes them to a file. If you schedule the sweep, the token lives in
 your own crontab or user environment, which only your account can read.
+`comeet_companies.tsv` is committed: it holds only public company page IDs
+and job counts, nothing about you.
 
 ## License
 
