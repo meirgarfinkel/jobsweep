@@ -488,5 +488,60 @@ finally:
     _srv.shutdown(); _srv.server_close()
     dashboard.fill.run, dashboard.applicant.load = _of, _ol
 
+print("\n#A5 profile from cv")
+import tempfile as _tf5, shutil as _sh5
+_d5 = pathlib.Path(_tf5.mkdtemp())
+_orig_ask = llm.ask
+_ol5 = applicant.HERE
+_asks = []
+def _ask5(prompt, backend="claude_cli", timeout=120, tools="", pdf_path=None):
+    _asks.append(dict(prompt=prompt, backend=backend, timeout=timeout, tools=tools, pdf_path=pdf_path))
+    return "# Background\nWorked at X."
+try:
+    (_d5 / "cv.pdf").write_bytes(b"%PDF-1.4 dummy")
+    (_d5 / "applicant.local.yaml").write_text("name: A B\nemail: a@b.c\ncv_path: cv.pdf\n")
+    _cfg5 = {"apply": {"backend": "claude_cli", "applicant_file": str(_d5 / "applicant.local.yaml"),
+                       "profile_file": str(_d5 / "profile.local.md"), "timeout": 120}}
+    applicant.HERE = _d5
+    llm.ask = _ask5
+    _o = js.run_profile_from_cv(_cfg5)
+    check("profile created", _o == _d5 / "profile.local.md" and "# Background" in _o.read_text())
+    check("cli got tools=Read", _asks[-1]["tools"] == "Read")
+    check("prompt names abs cv path", str(_d5 / "cv.pdf") in _asks[-1]["prompt"])
+    check("cv timeout at least 300", _asks[-1]["timeout"] >= 300)
+    _o.write_text("my edits")
+    _o2 = js.run_profile_from_cv(_cfg5)
+    check("second run writes .new", _o2.name == "profile.local.md.new" and "# Background" in _o2.read_text())
+    check("original untouched", _o.read_text() == "my edits")
+    (_d5 / "applicant.local.yaml").write_text("name: ''\n")
+    try: js.run_profile_from_cv(_cfg5); _pe = False
+    except applicant.ProfileError: _pe = True
+    check("bad applicant raises ProfileError", _pe)
+    llm.ask = _orig_ask
+    _sent = {}
+    class _R:
+        def read(self): return b'{"content":[{"text":"ok"}]}'
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+    _ou = llm.urllib.request.urlopen
+    def _uo(req, timeout=0): _sent["b"] = json.loads(req.data); return _R()
+    llm.urllib.request.urlopen = _uo
+    os.environ["ANTHROPIC_API_KEY"] = "dummy"
+    try:
+        llm.ask("p", "api", pdf_path=str(_d5 / "cv.pdf"))
+        _c = _sent["b"]["messages"][0]["content"]
+        check("api sends document block", _c[0]["type"] == "document" and _c[0]["source"]["media_type"] == "application/pdf"
+              and "\n" not in _c[0]["source"]["data"] and _c[1] == {"type": "text", "text": "p"})
+        llm.ask("p", "api")
+        check("api without pdf sends plain string", _sent["b"]["messages"][0]["content"] == "p")
+    finally:
+        llm.urllib.request.urlopen = _ou; os.environ.pop("ANTHROPIC_API_KEY", None)
+    llm.ask = _ask5
+    fill.run({}, {"name": "A", "email": "e"}, "", [], "claude_cli", timeout=77)
+    check("fill.run forwards timeout", _asks[-1]["timeout"] == 77)
+finally:
+    llm.ask = _orig_ask; applicant.HERE = _ol5
+    _sh5.rmtree(_d5, ignore_errors=True)
+
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)

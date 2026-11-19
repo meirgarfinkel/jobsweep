@@ -1027,6 +1027,29 @@ def run_harvest(cfg: dict, jobs: list[Job]) -> None:
               + "; ".join(added[:8]) + (" …" if len(added) > 8 else ""))
 
 
+def run_profile_from_cv(cfg: dict) -> Path:
+    """Draft the background Markdown from the CV; never overwrite an existing one."""
+    import applicant
+    import llm
+    ac = cfg.get("apply") or {}
+    here = Path(__file__).parent
+    profile = applicant.load(here / (ac.get("applicant_file") or "applicant.local.yaml"))
+    cv = profile["cv_path"]
+    prompt = (
+        f"Read the CV PDF at {cv} and write a Markdown background for the applicant. "
+        "Include: roles with dates, skills, education, languages, notable projects. "
+        "Facts only, taken from the CV; invent nothing. Reply with only the Markdown.")
+    timeout = max(int(ac.get("timeout") or 120), 300)
+    text = llm.ask(prompt, ac.get("backend") or "claude_cli", timeout=timeout,
+                   tools="Read", pdf_path=cv)
+    out = here / (ac.get("profile_file") or "profile.local.md")
+    if out.exists():
+        out = out.with_name(out.name + ".new")
+        print(f"{out.with_name(out.name[:-4])} already exists; writing {out} instead.")
+    out.write_text(text.strip() + "\n", encoding="utf-8")
+    return out
+
+
 def run_rescore(s: dict, db: str) -> None:
     """Score stored postings again after the rules change. Only the score and
     reasons columns are written."""
@@ -1098,6 +1121,8 @@ def main() -> None:
     ap.add_argument("--rescore", action="store_true",
                     help="re-apply the current scoring rules to postings "
                          "already stored; statuses and notes are untouched")
+    ap.add_argument("--profile-from-cv", action="store_true",
+                    help="draft profile.local.md (background for Apply for me) from your CV")
     ap.add_argument("--evaluate-limit", type=int, default=15,
                     help="max postings to fit-score in one pass")
     args = ap.parse_args()
@@ -1131,6 +1156,18 @@ def main() -> None:
                     location=r["location"] or "", url=r["url"] or "",
                     ats=r["ats"] or "", track=r["track"] or "") for r in rows]
         run_harvest(cfg, jobs)
+        return
+
+    if args.profile_from_cv:
+        import applicant
+        import llm
+        try:
+            out = run_profile_from_cv(cfg)
+        except (applicant.ProfileError, llm.LLMError) as e:
+            print(e)
+            sys.exit(1)
+        print(f"Wrote {out}")
+        print("Read it and correct anything wrong; fills use it as written.")
         return
 
     if args.serve:

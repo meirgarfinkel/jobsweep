@@ -508,7 +508,8 @@ def make_server(db: str | Path, port: int = 8765, threshold=None,
                     background = ""
                     notes.append("No profile.local.md yet: run python jobsweep.py --profile-from-cv.")
                 res = fill.run(dict(row), profile, background, fields,
-                               cfg.get("backend") or "claude_cli")
+                               cfg.get("backend") or "claude_cli",
+                               timeout=cfg.get("timeout", 120))
             except (applicant.ProfileError, llm.LLMError) as e:
                 self._json(200, {"error": str(e)}, origin)
                 return

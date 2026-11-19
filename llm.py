@@ -1,4 +1,5 @@
 """Model backend: `claude -p` by default, the Anthropic API optionally."""
+import base64
 import json
 import os
 import subprocess
@@ -50,14 +51,22 @@ def _ask_cli(prompt: str, timeout: int, tools: str) -> str:
     return str(data["result"])
 
 
-def _ask_api(prompt: str, timeout: int) -> str:
+def _ask_api(prompt: str, timeout: int, pdf_path: str | None = None) -> str:
     key = os.environ.get("ANTHROPIC_API_KEY")
     if not key:
         raise LLMError("Set ANTHROPIC_API_KEY or use apply.backend: claude_cli.")
+    content = prompt
+    if pdf_path:
+        with open(pdf_path, "rb") as fh:
+            data = base64.b64encode(fh.read()).decode("ascii")
+        content = [{"type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf",
+                               "data": data}},
+                   {"type": "text", "text": prompt}]
     body = json.dumps({
         "model": os.environ.get("JOBSWEEP_MODEL", DEFAULT_MODEL),
         "max_tokens": 4000,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": content}],
     }).encode()
     req = urllib.request.Request(
         API, data=body, method="POST",
@@ -75,9 +84,9 @@ def _ask_api(prompt: str, timeout: int) -> str:
 
 
 def ask(prompt: str, backend: str = "claude_cli", timeout: int = 120,
-        tools: str = "") -> str:
+        tools: str = "", pdf_path: str | None = None) -> str:
     if backend == "api":
-        return _ask_api(prompt, timeout)
+        return _ask_api(prompt, timeout, pdf_path)
     if backend == "claude_cli":
         return _ask_cli(prompt, timeout, tools)
     raise LLMError(f"Unknown backend '{backend}': use claude_cli or api.")

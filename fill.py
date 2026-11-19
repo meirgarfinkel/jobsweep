@@ -95,5 +95,6 @@ def parse_fill(raw, fields):
             "unanswered": [i for i in need if i not in values]}
 
 
-def run(job, profile, background, fields, backend):
-    return parse_fill(llm.ask(build_prompt(job, profile, background, fields), backend), fields)
+def run(job, profile, background, fields, backend, timeout=120):
+    prompt = build_prompt(job, profile, background, fields)
+    return parse_fill(llm.ask(prompt, backend, timeout=timeout), fields)
