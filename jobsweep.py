@@ -490,33 +490,7 @@ def reset_exclusions() -> None:
     EXCLUDED_SAMPLE.clear()
 
 
-# "5+ years of experience", "7-10 years of professional experience",
-# "at least 6 years' experience", "experience of 8 years", "5+ שנות ניסיון".
-_YEARS_PATTERNS = (
-    re.compile(r"(?:\b(over|more than)\s+)?\b(\d{1,2})\s*(?:\+|plus)?\s*"
-               r"(?:(?:-|–|to)\s*\d{1,2}\s*\+?\s*)?years?\b[^.\n]{0,60}?"
-               r"\bexperience", re.I),
-    re.compile(r"\bexperience\b[^.\n]{0,25}?\b(?:(over|more than)\s+)?"
-               r"(\d{1,2})\s*\+?\s*years?\b", re.I),
-    re.compile(r"()(\d{1,2})\s*\+?\s*(?:שנות|שנים)[^.\n]{0,20}?ניסיון"),
-    re.compile(r"ניסיון[^.\n]{0,20}?(?:(מעל|לפחות)\s*)?(\d{1,2})\s*\+?\s*שנ"),
-)
-
-
-def years_required(text: str) -> int | None:
-    """Largest years-of-experience requirement stated in the text, or None.
-
-    Numbers above 15 are ignored: those are company boasts ("20 years of
-    experience in the industry"), not requirements."""
-    found = []
-    for pat in _YEARS_PATTERNS:
-        for m in pat.finditer(text or ""):
-            n = int(m.group(2))
-            if m.group(1) in ("over", "more than", "מעל"):
-                n += 1
-            if 0 < n <= 15:
-                found.append(n)
-    return max(found) if found else None
+from extract import years_required  # noqa: E402
 
 
 def score_job(job: Job, s: dict) -> Job:

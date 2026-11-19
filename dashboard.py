@@ -10,12 +10,14 @@ from __future__ import annotations
 import html
 import json
 import sqlite3
+import threading
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import extract
 import store
 
 PAGE = """<!doctype html>
@@ -56,6 +58,11 @@ PAGE = """<!doctype html>
   .meta{{color:var(--muted);font-size:12.5px;margin-top:3px}}
   .co{{color:var(--company);font-weight:700}}
   .fresh{{color:var(--fresh)}} .stale{{color:var(--stale)}}
+  .facts{{display:flex;gap:5px;flex-wrap:wrap;align-items:center;flex:1}}
+  .tag{{font-size:11.5px;padding:2px 7px;border-radius:5px;
+        background:var(--bg);border:1px solid var(--line);color:var(--ink)}}
+  .yrs{{color:var(--stale);border-color:currentColor;font-weight:600}}
+  .none{{color:var(--muted);font-size:12px;font-style:italic}}
   .why{{font-size:12.5px;color:var(--muted);margin-top:6px;font-style:italic}}
   .fit{{margin-left:auto;display:flex;gap:7px;align-items:center;flex-shrink:0}}
   .pill{{font-size:11.5px;padding:2px 8px;border-radius:999px;
@@ -84,11 +91,10 @@ PAGE = """<!doctype html>
 async function save(uid, el) {{
   const row = el.closest('.job');
   const status = row.querySelector('select').value;
-  const notes  = row.querySelector('input[type=text]').value;
   const flag   = row.querySelector('.saved');
   const r = await fetch('/api/status', {{
     method:'POST', headers:{{'content-type':'application/json'}},
-    body: JSON.stringify({{uid, status, notes}})
+    body: JSON.stringify({{uid, status}})
   }});
   flag.textContent = r.ok ? 'saved' : 'failed';
   flag.style.opacity = 1;
@@ -143,6 +149,18 @@ def _ago(dt, has_time: bool) -> str:
     return f"{d} ago" if not hours else f"{d} and {h} ago"
 
 
+_FACTS: dict = {}
+
+
+def _facts(uid: str, desc: str):
+    """(years required, tech stack), cached per posting for this server run.
+    Keyed on the description's hash too, so a re-swept edit is picked up."""
+    key = (uid, hash(desc))
+    if key not in _FACTS:
+        _FACTS[key] = (extract.years_required(desc), extract.tech_stack(desc))
+    return _FACTS[key]
+
+
 def _job_html(r: sqlite3.Row) -> str:
     esc = html.escape
     try:
@@ -163,6 +181,16 @@ def _job_html(r: sqlite3.Row) -> str:
     safe_url = r["url"] if (r["url"] or "").startswith(("http://", "https://")) else ""
     link = (f'<a href="{esc(safe_url)}" target="_blank" rel="noopener">{title}</a>'
             if safe_url else title)
+    years, stack = _facts(r["uid"], r["description"] or "")
+    facts = ""
+    if years is not None:
+        facts += f'<span class="pill yrs">{years}+ yrs</span>'
+    if stack:
+        facts += "".join(f'<span class="tag">{esc(t)}</span>' for t in stack)
+    if not facts:
+        facts = '<span class="none">no stack or years stated</span>'
+    facts = f'<span class="facts">{facts}</span>'
+
     dt, has_time = _posted_time(r)
     posted = ""
     if dt is not None:
@@ -202,8 +230,7 @@ def _job_html(r: sqlite3.Row) -> str:
   {deets}
   <div class="ctl">
     <select onchange="save('{r["uid"]}', this)">{opts}</select>
-    <input type="text" placeholder="notes" value="{esc(r["notes"] or "")}"
-           onchange="save('{r["uid"]}', this)">
+    {facts}
     <span class="saved"></span>
   </div>
 </div>"""
@@ -301,6 +328,11 @@ def serve(db: str | Path, port: int = 8765, open_browser: bool = True,
                 return
             self.send_response(204)
             self.end_headers()
+
+    # Read stack and years out of every description now, so the first page
+    # load does not wait for it.
+    threading.Thread(target=lambda: render(db, None, threshold),
+                     daemon=True).start()
 
     url = f"http://127.0.0.1:{port}/"
     print(f"Review board: {url}  (ctrl-c to stop)")
