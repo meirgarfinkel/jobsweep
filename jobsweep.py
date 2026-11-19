@@ -574,15 +574,18 @@ class DirectSource:
                   f"postings (max_per_board={self.max_per_board})",
                   file=sys.stderr)
 
-        # The list has no descriptions. Fetch each one once: jobs already
-        # stored with a description are skipped (upsert keeps the stored
-        # text when this run's is empty).
+        # The list has no descriptions. Fetch each one once: for jobs already
+        # stored with a description, reuse that text instead of a request,
+        # so this run scores them on it too (the years cap needs it).
         base = f"https://{tenant}.{pod}.{domain}.com/wday/cxs/{tenant}/{site}"
-        skip = getattr(self, "known_described", None) or set()
+        skip = getattr(self, "known_described", None) or {}
         fetched = failed = 0
         for job in out:
             path = getattr(job, "_wd_path", "")
-            if not path or _workday_skip(job, skip):
+            if _workday_skip(job, skip):
+                job.description = skip[store.job_key(job.company, job.title)]
+                continue
+            if not path:
                 continue
             try:
                 info = (call("GET", base + path, pause=0.5)

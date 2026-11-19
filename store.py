@@ -96,11 +96,13 @@ def job_key(company: str, title: str) -> tuple[str, str]:
     return c, t
 
 
-def keys_with_description(conn) -> set[tuple[str, str]]:
-    """job_key() of every stored posting that already has a description, so
-    readers that pay a request per description can skip those."""
-    return {job_key(c, t) for c, t in conn.execute(
-        "SELECT company, title FROM jobs WHERE COALESCE(description, '') != ''")}
+def keys_with_description(conn) -> dict[tuple[str, str], str]:
+    """job_key() -> stored description, for every posting that has one, so
+    readers that pay a request per description can skip the request and
+    still score the posting on its text."""
+    return {job_key(c, t): d for c, t, d in conn.execute(
+        "SELECT company, title, description FROM jobs "
+        "WHERE COALESCE(description, '') != ''")}
 
 
 def uids_by_key(conn) -> dict[tuple[str, str], str]:

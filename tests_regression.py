@@ -327,8 +327,8 @@ with tempfile.TemporaryDirectory() as d:
                                location="", url="", ats="workday", description="text"))
         store.upsert(c, js.Job(uid="b", title="Frontend Developer", company="Acme",
                                location="", url="", ats="workday"))
-        check("keys_with_description lists only described rows",
-              store.keys_with_description(c) == {store.job_key("Acme", "Backend Developer")})
+        check("keys_with_description maps only described rows to their text",
+              store.keys_with_description(c) == {store.job_key("Acme", "Backend Developer"): "text"})
 
 print(f"\n{P} passed, {F} failed")
 sys.exit(1 if F else 0)
